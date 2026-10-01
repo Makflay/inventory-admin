@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import "./App.css";
 
+import { InventoryPage } from "./pages/InventoryPage";
+
 function App() {
   const [message, setMessage] = useState("Проверяем соединение…");
 
@@ -54,6 +56,7 @@ function App() {
     <main>
       <h1>Inventory Admin</h1>
       <p role="status">{message}</p>
+      <InventoryPage />
     </main>
   );
 }
