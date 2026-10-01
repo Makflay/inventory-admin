@@ -8,7 +8,7 @@ export function addItems(req: Request, res: Response): void {
   if (!req.is("application/json")) {
     res.status(415).json({
       error: "UNSUPPORTED_MEDIA_TYPE",
-      message: "Используй Content-Type: application/json",
+      message: "Используйте Content-Type: application/json",
     });
     return;
   }
@@ -34,7 +34,7 @@ export function addItems(req: Request, res: Response): void {
   if (ids.length === 0 || ids.length > MAX_IDS_PER_REQUEST) {
     res.status(400).json({
       error: "INVALID_IDS_COUNT",
-      message: `Передай от 1 до ${MAX_IDS_PER_REQUEST} ID`,
+      message: `Передайте от 1 до ${MAX_IDS_PER_REQUEST} ID`,
     });
     return;
   }
@@ -80,4 +80,51 @@ export function addItems(req: Request, res: Response): void {
     addedIds: [...incomingIds],
     addedCount: incomingIds.size,
   });
+}
+
+export function getAvailableItems(req: Request, res: Response): void {
+  const unsupportedParams = Object.keys(req.query).filter(
+    (key) => key !== "cursor",
+  );
+
+  if (unsupportedParams.length > 0) {
+    res.status(400).json({
+      error: "INVALID_QUERY",
+      message: "Запрос содержит неподдерживаемые query-параметры",
+      parameters: unsupportedParams,
+    });
+    return;
+  }
+
+  const rawCursor = req.query.cursor;
+  let afterId = 0;
+
+  if (rawCursor !== undefined) {
+    if (
+      typeof rawCursor !== "string" ||
+      !/^(0|[1-9]\d{0,15})$/.test(rawCursor)
+    ) {
+      res.status(400).json({
+        error: "INVALID_CURSOR",
+        message:
+          "Начальная точка выборки должна быть целым неотрицательным числом без ведущих нулей",
+      });
+      return;
+    }
+
+    afterId = Number(rawCursor);
+
+    if (!Number.isSafeInteger(afterId)) {
+      res.status(400).json({
+        error: "INVALID_CURSOR",
+        message: "Начальная точка выборки превышает допустимый диапазон",
+      });
+      return;
+    }
+  }
+
+  const page = itemStore.getAvailablePage(afterId);
+
+  res.setHeader("Cache-Control", "no-store");
+  res.status(200).json(page);
 }
