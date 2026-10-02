@@ -1,0 +1,27 @@
+{
+  "name": "@inventory/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/items.js",
+  "types": "./dist/items.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/items.d.ts",
+      "import": "./dist/items.js"
+    },
+    "./items": {
+      "types": "./dist/items.d.ts",
+      "import": "./dist/items.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2"
+  }
+}
