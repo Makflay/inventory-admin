@@ -1,10 +1,27 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Box, TextField } from "@mui/material";
 
 import { AvailableItemsResults } from "./AvailableItemsResults";
 
+const SEARCH_DEBOUNCE_MS = 300;
+
 export function AvailableItemsList() {
   const [search, setSearch] = useState("");
+  const [inputValue, setInputValue] = useState("");
+
+  useEffect(() => {
+    if (inputValue === search) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setSearch(inputValue);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [inputValue, search]);
 
   return (
     <>
@@ -15,7 +32,7 @@ export function AvailableItemsList() {
           label="Поиск по ID"
           value={search}
           onChange={(event) => {
-            setSearch(event.target.value);
+            setInputValue(event.target.value);
           }}
           slotProps={{
             htmlInput: {

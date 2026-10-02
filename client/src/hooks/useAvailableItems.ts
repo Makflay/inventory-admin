@@ -19,6 +19,10 @@ type AvailableItemsState = {
   initialized: boolean;
 };
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
 export function useAvailableItems(
   search: string,
   beforeChange: () => Set<string>,
@@ -86,7 +90,11 @@ export function useAvailableItems(
       try {
         const page = await getAvailableItems(controller.signal, request);
 
-        if (controller.signal.aborted || !mountedRef.current) {
+        if (
+          controller.signal.aborted ||
+          !mountedRef.current ||
+          requestRef.current !== controller
+        ) {
           return;
         }
 
@@ -105,7 +113,12 @@ export function useAvailableItems(
           initialized: true,
         });
       } catch (error) {
-        if (controller.signal.aborted || !mountedRef.current) {
+        if (
+          controller.signal.aborted ||
+          !mountedRef.current ||
+          isAbortError(error) ||
+          requestRef.current !== controller
+        ) {
           return;
         }
 
