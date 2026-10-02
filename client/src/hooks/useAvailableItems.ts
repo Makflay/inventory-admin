@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 
 import type { AvailableItemsPageRequest } from "@inventory/shared";
 
@@ -6,8 +6,6 @@ import { getAvailableItems } from "../api/items.api";
 import { AvailableItemsCache } from "../services/available-items-cache";
 import type { CachedPage } from "../services/available-items-cache";
 import { ApiRequestError } from "../api/api-error";
-
-const INITIAL_REQUEST: AvailableItemsPageRequest = {};
 
 type LoadError = {
   request: AvailableItemsPageRequest;
@@ -21,12 +19,19 @@ type AvailableItemsState = {
   initialized: boolean;
 };
 
-export function useAvailableItems(beforeChange: () => Set<string>) {
-  const [cache] = useState(() => new AvailableItemsCache());
+export function useAvailableItems(
+  search: string,
+  beforeChange: () => Set<string>,
+) {
+  const initialRequest = useMemo<AvailableItemsPageRequest>(
+    () => ({ search }),
+    [search],
+  );
 
+  const [cache] = useState(() => new AvailableItemsCache());
   const [state, setState] = useState<AvailableItemsState>({
     pages: [],
-    loading: INITIAL_REQUEST,
+    loading: initialRequest,
     error: null,
     initialized: false,
   });
@@ -134,7 +139,7 @@ export function useAvailableItems(beforeChange: () => Set<string>) {
 
     void Promise.resolve().then(() => {
       if (!cancelled) {
-        void requestPage(INITIAL_REQUEST);
+        void requestPage(initialRequest);
       }
     });
 
@@ -144,7 +149,7 @@ export function useAvailableItems(beforeChange: () => Set<string>) {
       requestRef.current?.abort();
       requestRef.current = null;
     };
-  }, [requestPage]);
+  }, [requestPage, initialRequest]);
 
   const loadPage = useCallback(
     (request: AvailableItemsPageRequest) => {

@@ -11,6 +11,10 @@ function isValidId(id: number): boolean {
   return Number.isSafeInteger(id) && id > 0;
 }
 
+function matchesSearch(id: number, search: string): boolean {
+  return search === "" || String(id).includes(search);
+}
+
 class ItemStore {
   private readonly customIds = new Set<number>();
   private readonly selectedIds = new Set<number>();
@@ -41,7 +45,11 @@ class ItemStore {
     }
   }
 
-  private collectAfter(boundary: number, limit: number): number[] {
+  private collectAfter(
+    boundary: number,
+    search: string,
+    limit: number,
+  ): number[] {
     const result: number[] = [];
 
     if (boundary < BASE_ID_MAX) {
@@ -50,7 +58,7 @@ class ItemStore {
         id <= BASE_ID_MAX && result.length < limit;
         id++
       ) {
-        if (!this.selectedIds.has(id)) {
+        if (!this.selectedIds.has(id) && matchesSearch(id, search)) {
           result.push(id);
         }
       }
@@ -65,7 +73,8 @@ class ItemStore {
         !isValidId(id) ||
         id <= BASE_ID_MAX ||
         id <= boundary ||
-        this.selectedIds.has(id)
+        this.selectedIds.has(id) ||
+        !matchesSearch(id, search)
       ) {
         continue;
       }
@@ -81,7 +90,11 @@ class ItemStore {
     return result;
   }
 
-  private collectBefore(boundary: number, limit: number): number[] {
+  private collectBefore(
+    boundary: number,
+    search: string,
+    limit: number,
+  ): number[] {
     const result: number[] = [];
 
     for (const id of this.customIds) {
@@ -89,7 +102,8 @@ class ItemStore {
         !isValidId(id) ||
         id <= BASE_ID_MAX ||
         id >= boundary ||
-        this.selectedIds.has(id)
+        this.selectedIds.has(id) ||
+        !matchesSearch(id, search)
       ) {
         continue;
       }
@@ -111,7 +125,7 @@ class ItemStore {
       id >= BASE_ID_MIN && result.length < limit;
       id--
     ) {
-      if (!this.selectedIds.has(id)) {
+      if (!this.selectedIds.has(id) && matchesSearch(id, search)) {
         result.push(id);
       }
     }
@@ -121,6 +135,7 @@ class ItemStore {
 
   private createPage(
     ids: number[],
+    search: string,
     emptyHasNextPage: boolean,
     emptyHasPreviousPage: boolean,
   ): AvailableItemsPage {
@@ -144,8 +159,8 @@ class ItemStore {
       pageInfo: {
         startCursor: String(startId),
         endCursor: String(endId),
-        hasNextPage: this.collectAfter(endId, 1).length > 0,
-        hasPreviousPage: this.collectBefore(startId, 1).length > 0,
+        hasNextPage: this.collectAfter(endId, search, 1).length > 0,
+        hasPreviousPage: this.collectBefore(startId, search, 1).length > 0,
       },
     };
   }
@@ -153,31 +168,35 @@ class ItemStore {
   getAvailablePage(
     request: AvailableItemsPageRequest = {},
   ): AvailableItemsPage {
+    const search = request.search ?? "";
+
     if (request.after !== undefined) {
       const boundary = Number(request.after);
-      const ids = this.collectAfter(boundary, PAGE_SIZE);
+      const ids = this.collectAfter(boundary, search, PAGE_SIZE);
 
       return this.createPage(
         ids,
+        search,
         false,
-        this.collectBefore(boundary, 1).length > 0,
+        this.collectBefore(boundary, search, 1).length > 0,
       );
     }
 
     if (request.before !== undefined) {
       const boundary = Number(request.before);
-      const ids = this.collectBefore(boundary, PAGE_SIZE).reverse();
+      const ids = this.collectBefore(boundary, search, PAGE_SIZE).reverse();
 
       return this.createPage(
         ids,
-        this.collectAfter(boundary, 1).length > 0,
+        search,
+        this.collectAfter(boundary, search, 1).length > 0,
         false,
       );
     }
 
-    const ids = this.collectAfter(0, PAGE_SIZE);
+    const ids = this.collectAfter(0, search, PAGE_SIZE);
 
-    return this.createPage(ids, false, false);
+    return this.createPage(ids, search, false, false);
   }
 }
 

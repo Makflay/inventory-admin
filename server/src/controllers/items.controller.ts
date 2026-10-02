@@ -6,6 +6,7 @@ import { itemStore } from "../services/item-store.js";
 const MAX_IDS_PER_REQUEST = 1000;
 
 const CURSOR_PATTERN = /^[1-9]\d{0,15}$/;
+const SEARCH_PATTERN = /^[1-9]\d*$/;
 
 function parseCursor(
   value: unknown,
@@ -31,6 +32,24 @@ function parseCursor(
       message:
         "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
       parameter,
+    });
+
+    return null;
+  }
+
+  return value;
+}
+
+function parseSearch(value: unknown, res: Response): string | null {
+  if (value === undefined || value === "") {
+    return "";
+  }
+
+  if (typeof value !== "string" || !SEARCH_PATTERN.test(value)) {
+    res.status(400).json({
+      error: "INVALID_SEARCH",
+      message:
+        "Введите последовательность цифр без ведущих нулей или очистите поле поиска.",
     });
 
     return null;
@@ -120,7 +139,7 @@ export function addItems(req: Request, res: Response): void {
 
 export function getAvailableItems(req: Request, res: Response): void {
   const unsupportedParams = Object.keys(req.query).filter(
-    (key) => key !== "after" && key !== "before",
+    (key) => key !== "search" && key !== "after" && key !== "before",
   );
 
   if (unsupportedParams.length > 0) {
@@ -135,6 +154,12 @@ export function getAvailableItems(req: Request, res: Response): void {
 
   const rawAfter = req.query.after;
   const rawBefore = req.query.before;
+
+  const search = parseSearch(req.query.search, res);
+
+  if (search === null) {
+    return;
+  }
 
   if (rawAfter !== undefined && rawBefore !== undefined) {
     res.status(400).json({
@@ -154,7 +179,7 @@ export function getAvailableItems(req: Request, res: Response): void {
       return;
     }
 
-    pagination = { after };
+    pagination = { search, after };
   } else if (rawBefore !== undefined) {
     const before = parseCursor(rawBefore, "before", res);
 
@@ -162,9 +187,9 @@ export function getAvailableItems(req: Request, res: Response): void {
       return;
     }
 
-    pagination = { before };
+    pagination = { search, before };
   } else {
-    pagination = {};
+    pagination = { search };
   }
 
   res.setHeader("Cache-Control", "no-store");

@@ -59,10 +59,12 @@ function validatePageOrder(
   request: AvailableItemsPageRequest,
 ): void {
   let previousId = 0;
+  const search = request.search ?? "";
 
   for (const id of page.ids) {
     if (
       id <= previousId ||
+      (search !== "" && !String(id).includes(search)) ||
       (request.after !== undefined && id <= Number(request.after)) ||
       (request.before !== undefined && id >= Number(request.before))
     ) {
@@ -109,6 +111,10 @@ export async function getAvailableItems(
   }
 
   const query = new URLSearchParams();
+
+  if (request.search !== undefined) {
+    query.set("search", request.search);
+  }
 
   if (request.after !== undefined) {
     query.set("after", request.after);

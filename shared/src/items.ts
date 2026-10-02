@@ -1,4 +1,6 @@
-export type AvailableItemsPageRequest =
+export type AvailableItemsPageRequest = {
+  search?: string;
+} & (
   | {
       after?: never;
       before?: never;
@@ -10,7 +12,8 @@ export type AvailableItemsPageRequest =
   | {
       after?: never;
       before: string;
-    };
+    }
+);
 
 export type AvailableItemsPageInfo = {
   startCursor: string | null;
