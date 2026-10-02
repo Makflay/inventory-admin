@@ -1,19 +1,15 @@
+import type {
+  AvailableItemsPage,
+  AvailableItemsPageRequest,
+} from "@inventory/shared";
+
 import { ApiRequestError, readApiErrorResponse } from "./api-error";
 
-export type PageDirection = "forward" | "backward";
+const PAGE_SIZE = 20;
 
-export type PageRequest = {
-  direction: PageDirection;
-  cursor: string | null;
-};
-
-export type AvailableItemsPage = {
-  ids: number[];
-  nextCursor: string | null;
-  prevCursor: string | null;
-  hasNext: boolean;
-  hasPrevious: boolean;
-};
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
 
 function isAvailableItemsPage(value: unknown): value is AvailableItemsPage {
   if (
@@ -21,45 +17,80 @@ function isAvailableItemsPage(value: unknown): value is AvailableItemsPage {
     value === null ||
     !("ids" in value) ||
     !Array.isArray(value.ids) ||
-    !("nextCursor" in value) ||
-    !("prevCursor" in value) ||
-    !("hasNext" in value) ||
-    typeof value.hasNext !== "boolean" ||
-    !("hasPrevious" in value) ||
-    typeof value.hasPrevious !== "boolean"
+    !("pageInfo" in value) ||
+    typeof value.pageInfo !== "object" ||
+    value.pageInfo === null
   ) {
     return false;
   }
 
   const ids: unknown[] = value.ids;
+  const pageInfo = value.pageInfo;
 
   if (
-    ids.length > 20 ||
+    ids.length > PAGE_SIZE ||
     !ids.every(
       (id) => typeof id === "number" && Number.isSafeInteger(id) && id > 0,
-    )
+    ) ||
+    !("startCursor" in pageInfo) ||
+    !isNullableString(pageInfo.startCursor) ||
+    !("endCursor" in pageInfo) ||
+    !isNullableString(pageInfo.endCursor) ||
+    !("hasNextPage" in pageInfo) ||
+    typeof pageInfo.hasNextPage !== "boolean" ||
+    !("hasPreviousPage" in pageInfo) ||
+    typeof pageInfo.hasPreviousPage !== "boolean"
   ) {
     return false;
   }
 
   if (ids.length === 0) {
-    return (
-      !value.hasNext &&
-      !value.hasPrevious &&
-      value.nextCursor === null &&
-      value.prevCursor === null
-    );
+    return pageInfo.startCursor === null && pageInfo.endCursor === null;
   }
 
   return (
-    value.nextCursor === (value.hasNext ? String(ids[ids.length - 1]) : null) &&
-    value.prevCursor === (value.hasPrevious ? String(ids[0]) : null)
+    pageInfo.startCursor === String(ids[0]) &&
+    pageInfo.endCursor === String(ids[ids.length - 1])
   );
+}
+
+function validatePageOrder(
+  page: AvailableItemsPage,
+  request: AvailableItemsPageRequest,
+): void {
+  let previousId = 0;
+
+  for (const id of page.ids) {
+    if (
+      id <= previousId ||
+      (request.after !== undefined && id <= Number(request.after)) ||
+      (request.before !== undefined && id >= Number(request.before))
+    ) {
+      throw new ApiRequestError(
+        "INVALID_PAGE_ORDER",
+        "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
+      );
+    }
+
+    previousId = id;
+  }
+
+  const hasRequestedContinuation =
+    request.before !== undefined
+      ? page.pageInfo.hasPreviousPage
+      : page.pageInfo.hasNextPage;
+
+  if (hasRequestedContinuation && page.ids.length !== PAGE_SIZE) {
+    throw new ApiRequestError(
+      "INVALID_PAGE_SIZE",
+      "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
+    );
+  }
 }
 
 export async function getAvailableItems(
   signal: AbortSignal,
-  request: PageRequest,
+  request: AvailableItemsPageRequest,
 ): Promise<AvailableItemsPage> {
   const apiUrl = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, "");
 
@@ -70,25 +101,32 @@ export async function getAvailableItems(
     );
   }
 
-  if (request.direction === "backward" && request.cursor === null) {
+  if (request.after !== undefined && request.before !== undefined) {
     throw new ApiRequestError(
       "CLIENT_VALIDATION_ERROR",
       "Не удалось определить нужную часть списка. Обновите страницу и попробуйте снова.",
     );
   }
 
-  const query = new URLSearchParams({
-    direction: request.direction,
-  });
+  const query = new URLSearchParams();
 
-  if (request.cursor !== null) {
-    query.set("cursor", request.cursor);
+  if (request.after !== undefined) {
+    query.set("after", request.after);
   }
+
+  if (request.before !== undefined) {
+    query.set("before", request.before);
+  }
+
+  const queryString = query.toString();
+  const url = `${apiUrl}/api/items/available${
+    queryString.length > 0 ? `?${queryString}` : ""
+  }`;
 
   let response: Response;
 
   try {
-    response = await fetch(`${apiUrl}/api/items/available?${query}`, {
+    response = await fetch(url, {
       signal,
       headers: { Accept: "application/json" },
     });
@@ -128,32 +166,7 @@ export async function getAvailableItems(
     );
   }
 
-  const boundary = Number(request.cursor ?? 0);
-  let previousId = 0;
-
-  for (const id of data.ids) {
-    if (
-      id <= previousId ||
-      (request.direction === "forward" ? id <= boundary : id >= boundary)
-    ) {
-      throw new ApiRequestError(
-        "INVALID_PAGE_ORDER",
-        "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
-      );
-    }
-
-    previousId = id;
-  }
-
-  const hasContinuation =
-    request.direction === "forward" ? data.hasNext : data.hasPrevious;
-
-  if (hasContinuation && data.ids.length !== 20) {
-    throw new ApiRequestError(
-      "INVALID_PAGE_SIZE",
-      "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
-    );
-  }
+  validatePageOrder(data, request);
 
   return data;
 }

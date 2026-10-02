@@ -1,23 +1,32 @@
-import type { AvailableItemsPage, PageRequest } from "../api/items.api";
+import type {
+  AvailableItemsPage,
+  AvailableItemsPageRequest,
+} from "@inventory/shared";
 
 const MAX_PAGES = 250;
+const PAGE_SIZE = 20;
 
 export type CachedPage = {
   key: string;
   data: AvailableItemsPage;
 
-  // Известные границы соседства.
-  // Они удаляются вместе со страницей.
-  before: string | null;
-  after: string | null;
+  requestAfter: string | null;
+  requestBefore: string | null;
 };
 
-function lastId(page: CachedPage): string {
-  return String(page.data.ids[page.data.ids.length - 1]!);
+function startCursor(page: CachedPage): string {
+  return page.data.pageInfo.startCursor!;
+}
+
+function endCursor(page: CachedPage): string {
+  return page.data.pageInfo.endCursor!;
 }
 
 export function areAdjacent(left: CachedPage, right: CachedPage): boolean {
-  return right.before === lastId(left) || left.after === right.key;
+  return (
+    right.requestAfter === endCursor(left) ||
+    left.requestBefore === startCursor(right)
+  );
 }
 
 export class AvailableItemsCache {
@@ -38,49 +47,59 @@ export class AvailableItemsCache {
     this.entries.set(key, entry);
   }
 
-  anchor(request: PageRequest): CachedPage | undefined {
-    if (request.cursor === null) return undefined;
+  anchor(request: AvailableItemsPageRequest): CachedPage | undefined {
+    if (request.after !== undefined) {
+      return [...this.entries.values()].find(
+        (page) => endCursor(page) === request.after,
+      );
+    }
 
-    return [...this.entries.values()].find((page) =>
-      request.direction === "forward"
-        ? lastId(page) === request.cursor
-        : page.key === request.cursor,
-    );
+    if (request.before !== undefined) {
+      return [...this.entries.values()].find(
+        (page) => startCursor(page) === request.before,
+      );
+    }
+
+    return undefined;
   }
 
-  read(request: PageRequest): CachedPage | undefined {
+  read(request: AvailableItemsPageRequest): CachedPage | undefined {
     const pages = this.snapshot();
     let result: CachedPage | undefined;
 
-    if (request.cursor === null) {
-      result = pages.find((page) => !page.data.hasPrevious);
-    } else {
-      // Страница уже могла быть получена ровно по этому запросу.
-      result = pages.find((page) =>
-        request.direction === "forward"
-          ? page.before === request.cursor
-          : page.after === request.cursor,
-      );
+    if (request.after === undefined && request.before === undefined) {
+      result = pages.find((page) => !page.data.pageInfo.hasPreviousPage);
+    } else if (request.after !== undefined) {
+      result = pages.find((page) => page.requestAfter === request.after);
 
       if (result === undefined) {
         const anchor = this.anchor(request);
-        const index = pages.findIndex((page) => page.key === anchor?.key);
+        const anchorIndex = pages.findIndex((page) => page.key === anchor?.key);
 
-        if (index >= 0) {
-          const neighbor =
-            request.direction === "forward"
-              ? pages[index + 1]
-              : pages[index - 1];
+        const neighbor = anchorIndex >= 0 ? pages[anchorIndex + 1] : undefined;
 
-          if (
-            anchor !== undefined &&
-            neighbor !== undefined &&
-            (request.direction === "forward"
-              ? areAdjacent(anchor, neighbor)
-              : areAdjacent(neighbor, anchor))
-          ) {
-            result = neighbor;
-          }
+        if (
+          anchor !== undefined &&
+          neighbor !== undefined &&
+          areAdjacent(anchor, neighbor)
+        ) {
+          result = neighbor;
+        }
+      }
+    } else if (request.before !== undefined) {
+      result = pages.find((page) => page.requestBefore === request.before);
+
+      if (result === undefined) {
+        const anchor = this.anchor(request);
+        const anchorIndex = pages.findIndex((page) => page.key === anchor?.key);
+        const neighbor = anchorIndex >= 0 ? pages[anchorIndex - 1] : undefined;
+
+        if (
+          anchor !== undefined &&
+          neighbor !== undefined &&
+          areAdjacent(neighbor, anchor)
+        ) {
+          result = neighbor;
         }
       }
     }
@@ -94,48 +113,52 @@ export class AvailableItemsCache {
 
   insert(
     data: AvailableItemsPage,
-    request: PageRequest,
+    request: AvailableItemsPageRequest,
     visibleKeys: ReadonlySet<string>,
   ): void {
     const anchor = this.anchor(request);
 
-    // Пустой ответ завершает загрузку соответствующей границы.
-    // Пустые страницы в кэше не накапливаем.
     if (data.ids.length === 0) {
-      if (anchor !== undefined) {
-        const updated: CachedPage = {
-          ...anchor,
-          data:
-            request.direction === "forward"
-              ? {
-                  ...anchor.data,
-                  hasNext: false,
-                  nextCursor: null,
-                }
-              : {
-                  ...anchor.data,
-                  hasPrevious: false,
-                  prevCursor: null,
-                },
-        };
-
-        this.entries.set(anchor.key, updated);
-        this.touch(anchor.key);
+      if (anchor === undefined) {
+        return;
       }
 
+      if (request.after !== undefined) {
+        this.entries.set(anchor.key, {
+          ...anchor,
+          data: {
+            ...anchor.data,
+            pageInfo: {
+              ...anchor.data.pageInfo,
+              hasNextPage: false,
+            },
+          },
+        });
+      } else if (request.before !== undefined) {
+        this.entries.set(anchor.key, {
+          ...anchor,
+          data: {
+            ...anchor.data,
+            pageInfo: {
+              ...anchor.data.pageInfo,
+              hasPreviousPage: false,
+            },
+          },
+        });
+      }
+
+      this.touch(anchor.key);
       return;
     }
 
-    if (data.ids.length > 20) {
+    if (data.ids.length > PAGE_SIZE) {
       throw new Error("Страница превышает 20 элементов");
     }
 
-    const key = String(data.ids[0]!);
+    const key = data.pageInfo.startCursor!;
     const last = data.ids[data.ids.length - 1]!;
     const existing = this.entries.get(key);
 
-    // При изменении набора данных нельзя молча смешивать
-    // пересекающиеся страницы разных состояний сервера.
     for (const page of this.entries.values()) {
       if (page.key === key) {
         if (
@@ -148,7 +171,10 @@ export class AvailableItemsCache {
         continue;
       }
 
-      if (Number(page.key) <= last && Number(lastId(page)) >= Number(key)) {
+      if (
+        Number(startCursor(page)) <= last &&
+        Number(endCursor(page)) >= Number(key)
+      ) {
         throw new Error("Данные изменились. Обновите страницу.");
       }
     }
@@ -174,14 +200,14 @@ export class AvailableItemsCache {
     const entry: CachedPage = {
       key,
       data,
-      before:
-        request.direction === "forward"
-          ? request.cursor
-          : (existing?.before ?? null),
-      after:
-        request.direction === "backward"
-          ? request.cursor
-          : (existing?.after ?? null),
+      requestAfter:
+        request.after !== undefined
+          ? request.after
+          : (existing?.requestAfter ?? null),
+      requestBefore:
+        request.before !== undefined
+          ? request.before
+          : (existing?.requestBefore ?? null),
     };
 
     this.entries.delete(key);

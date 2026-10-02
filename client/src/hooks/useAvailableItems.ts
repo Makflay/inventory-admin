@@ -1,24 +1,22 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 
+import type { AvailableItemsPageRequest } from "@inventory/shared";
+
 import { getAvailableItems } from "../api/items.api";
-import type { PageRequest } from "../api/items.api";
 import { AvailableItemsCache } from "../services/available-items-cache";
 import type { CachedPage } from "../services/available-items-cache";
 import { ApiRequestError } from "../api/api-error";
 
-const INITIAL_REQUEST: PageRequest = {
-  direction: "forward",
-  cursor: null,
-};
+const INITIAL_REQUEST: AvailableItemsPageRequest = {};
 
 type LoadError = {
-  request: PageRequest;
+  request: AvailableItemsPageRequest;
   message: string;
 };
 
 type AvailableItemsState = {
   pages: CachedPage[];
-  loading: PageRequest | null;
+  loading: AvailableItemsPageRequest | null;
   error: LoadError | null;
   initialized: boolean;
 };
@@ -38,7 +36,7 @@ export function useAvailableItems(beforeChange: () => Set<string>) {
   const errorRef = useRef<LoadError | null>(null);
 
   const requestPage = useCallback(
-    async (request: PageRequest, retry = false) => {
+    async (request: AvailableItemsPageRequest, retry = false) => {
       if (
         !mountedRef.current ||
         requestRef.current !== null ||
@@ -51,14 +49,20 @@ export function useAvailableItems(beforeChange: () => Set<string>) {
         return;
       }
 
-      if (request.cursor !== null) {
+      if (request.after !== undefined || request.before !== undefined) {
         const anchor = cache.anchor(request);
 
+        if (anchor === undefined) {
+          return;
+        }
+
+        if (request.after !== undefined && !anchor.data.pageInfo.hasNextPage) {
+          return;
+        }
+
         if (
-          anchor === undefined ||
-          (request.direction === "forward"
-            ? !anchor.data.hasNext
-            : !anchor.data.hasPrevious)
+          request.before !== undefined &&
+          !anchor.data.pageInfo.hasPreviousPage
         ) {
           return;
         }
@@ -143,7 +147,7 @@ export function useAvailableItems(beforeChange: () => Set<string>) {
   }, [requestPage]);
 
   const loadPage = useCallback(
-    (request: PageRequest) => {
+    (request: AvailableItemsPageRequest) => {
       void requestPage(request);
     },
     [requestPage],
