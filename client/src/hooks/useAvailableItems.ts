@@ -1,99 +1,119 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 
 import { getAvailableItems } from "../api/items.api";
-import type { AvailableItemsPage } from "../api/items.api";
+import type { PageRequest } from "../api/items.api";
+import { AvailableItemsCache } from "../services/available-items-cache";
+import type { CachedPage } from "../services/available-items-cache";
+import { ApiRequestError } from "../api/api-error";
 
-type LoadedPage = {
-  requestCursor: string | null;
-  data: AvailableItemsPage;
+const INITIAL_REQUEST: PageRequest = {
+  direction: "forward",
+  cursor: null,
+};
+
+type LoadError = {
+  request: PageRequest;
+  message: string;
 };
 
 type AvailableItemsState = {
-  pages: LoadedPage[];
-  isLoading: boolean;
-  error: string | null;
+  pages: CachedPage[];
+  loading: PageRequest | null;
+  error: LoadError | null;
+  initialized: boolean;
 };
 
-type UseAvailableItemsResult = AvailableItemsState & {
-  hasMore: boolean;
-  loadNextPage: () => void;
-  retry: () => void;
-};
+export function useAvailableItems(beforeChange: () => Set<string>) {
+  const [cache] = useState(() => new AvailableItemsCache());
 
-export function useAvailableItems(): UseAvailableItemsResult {
   const [state, setState] = useState<AvailableItemsState>({
     pages: [],
-    isLoading: true,
+    loading: INITIAL_REQUEST,
     error: null,
+    initialized: false,
   });
 
   const mountedRef = useRef(false);
   const requestRef = useRef<AbortController | null>(null);
-  const loadedCursorsRef = useRef(new Set<string | null>());
-  const nextCursorRef = useRef<string | null>(null);
-  const hasMoreRef = useRef(true);
-  const errorRef = useRef(false);
+  const errorRef = useRef<LoadError | null>(null);
 
   const requestPage = useCallback(
-    async (cursor: string | null, retry = false) => {
+    async (request: PageRequest, retry = false) => {
       if (
         !mountedRef.current ||
         requestRef.current !== null ||
-        !hasMoreRef.current ||
-        loadedCursorsRef.current.has(cursor) ||
-        cursor !== nextCursorRef.current ||
-        (errorRef.current && !retry)
+        (errorRef.current !== null && !retry)
       ) {
         return;
       }
 
-      const controller = new AbortController();
+      if (cache.read(request) !== undefined) {
+        return;
+      }
 
+      if (request.cursor !== null) {
+        const anchor = cache.anchor(request);
+
+        if (
+          anchor === undefined ||
+          (request.direction === "forward"
+            ? !anchor.data.hasNext
+            : !anchor.data.hasPrevious)
+        ) {
+          return;
+        }
+      }
+
+      const controller = new AbortController();
       requestRef.current = controller;
-      errorRef.current = false;
+      errorRef.current = null;
 
       setState((previous) => ({
         ...previous,
-        isLoading: true,
+        loading: request,
         error: null,
       }));
 
       try {
-        const page = await getAvailableItems(controller.signal, cursor);
+        const page = await getAvailableItems(controller.signal, request);
 
         if (controller.signal.aborted || !mountedRef.current) {
           return;
         }
 
-        loadedCursorsRef.current.add(cursor);
-        nextCursorRef.current = page.nextCursor;
-        hasMoreRef.current = page.hasMore;
+        const visibleKeys = beforeChange();
 
-        setState((previous) => ({
-          pages: [
-            ...previous.pages,
-            {
-              requestCursor: cursor,
-              data: page,
-            },
-          ],
-          isLoading: false,
+        for (const key of visibleKeys) {
+          cache.touch(key);
+        }
+
+        cache.insert(page, request, visibleKeys);
+
+        setState({
+          pages: cache.snapshot(),
+          loading: null,
           error: null,
-        }));
+          initialized: true,
+        });
       } catch (error) {
         if (controller.signal.aborted || !mountedRef.current) {
           return;
         }
 
-        errorRef.current = true;
+        const failure: LoadError = {
+          request,
+          message:
+            error instanceof ApiRequestError
+              ? error.message
+              : "Не удалось загрузить элементы. Попробуйте снова.",
+        };
+
+        errorRef.current = failure;
 
         setState((previous) => ({
           ...previous,
-          isLoading: false,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Не удалось загрузить элементы",
+          loading: null,
+          error: failure,
         }));
       } finally {
         if (requestRef.current === controller) {
@@ -101,7 +121,7 @@ export function useAvailableItems(): UseAvailableItemsResult {
         }
       }
     },
-    [],
+    [cache, beforeChange],
   );
 
   useEffect(() => {
@@ -110,7 +130,7 @@ export function useAvailableItems(): UseAvailableItemsResult {
 
     void Promise.resolve().then(() => {
       if (!cancelled) {
-        void requestPage(null);
+        void requestPage(INITIAL_REQUEST);
       }
     });
 
@@ -122,28 +142,27 @@ export function useAvailableItems(): UseAvailableItemsResult {
     };
   }, [requestPage]);
 
-  const lastPage = state.pages[state.pages.length - 1];
-  const nextCursor = lastPage?.data.nextCursor ?? null;
-  const hasMore = lastPage?.data.hasMore ?? true;
-
-  const loadNextPage = useCallback(() => {
-    if (lastPage === undefined || !hasMore || nextCursor === null) {
-      return;
-    }
-
-    void requestPage(nextCursor);
-  }, [lastPage, hasMore, nextCursor, requestPage]);
+  const loadPage = useCallback(
+    (request: PageRequest) => {
+      void requestPage(request);
+    },
+    [requestPage],
+  );
 
   const retry = useCallback(() => {
-    void requestPage(nextCursor, true);
-  }, [nextCursor, requestPage]);
+    const failure = errorRef.current;
+
+    if (failure !== null) {
+      void requestPage(failure.request, true);
+    }
+  }, [requestPage]);
+
+  const touchPage = useCallback((key: string) => cache.touch(key), [cache]);
 
   return {
-    pages: state.pages,
-    isLoading: state.isLoading,
-    error: state.error,
-    hasMore,
-    loadNextPage,
+    ...state,
+    loadPage,
     retry,
+    touchPage,
   };
 }

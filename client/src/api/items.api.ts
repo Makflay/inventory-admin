@@ -1,9 +1,18 @@
-import { isApiError } from "./api-error";
+import { ApiRequestError, readApiErrorResponse } from "./api-error";
+
+export type PageDirection = "forward" | "backward";
+
+export type PageRequest = {
+  direction: PageDirection;
+  cursor: string | null;
+};
 
 export type AvailableItemsPage = {
   ids: number[];
   nextCursor: string | null;
-  hasMore: boolean;
+  prevCursor: string | null;
+  hasNext: boolean;
+  hasPrevious: boolean;
 };
 
 function isAvailableItemsPage(value: unknown): value is AvailableItemsPage {
@@ -13,101 +22,137 @@ function isAvailableItemsPage(value: unknown): value is AvailableItemsPage {
     !("ids" in value) ||
     !Array.isArray(value.ids) ||
     !("nextCursor" in value) ||
-    !("hasMore" in value) ||
-    typeof value.hasMore !== "boolean"
+    !("prevCursor" in value) ||
+    !("hasNext" in value) ||
+    typeof value.hasNext !== "boolean" ||
+    !("hasPrevious" in value) ||
+    typeof value.hasPrevious !== "boolean"
   ) {
     return false;
   }
 
   const ids: unknown[] = value.ids;
 
-  const validIds =
-    ids.length <= 20 &&
-    ids.every(
+  if (
+    ids.length > 20 ||
+    !ids.every(
       (id) => typeof id === "number" && Number.isSafeInteger(id) && id > 0,
+    )
+  ) {
+    return false;
+  }
+
+  if (ids.length === 0) {
+    return (
+      !value.hasNext &&
+      !value.hasPrevious &&
+      value.nextCursor === null &&
+      value.prevCursor === null
     );
+  }
 
-  const validCursor =
-    value.nextCursor === null ||
-    (typeof value.nextCursor === "string" &&
-      /^[1-9]\d{0,15}$/.test(value.nextCursor) &&
-      Number.isSafeInteger(Number(value.nextCursor)));
-
-  return validIds && validCursor;
+  return (
+    value.nextCursor === (value.hasNext ? String(ids[ids.length - 1]) : null) &&
+    value.prevCursor === (value.hasPrevious ? String(ids[0]) : null)
+  );
 }
 
 export async function getAvailableItems(
   signal: AbortSignal,
-  cursor: string | null = null,
+  request: PageRequest,
 ): Promise<AvailableItemsPage> {
   const apiUrl = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, "");
 
   if (!apiUrl) {
-    throw new Error("Не настроен адрес API: VITE_API_URL");
-  }
-
-  const query = new URLSearchParams();
-
-  if (cursor !== null) {
-    query.set("cursor", cursor);
-  }
-
-  const queryString = query.toString();
-  const url =
-    `${apiUrl}/api/items/available` + (queryString ? `?${queryString}` : "");
-
-  const response = await fetch(url, {
-    signal,
-    headers: {
-      Accept: "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    let errorData: unknown;
-
-    try {
-      errorData = await response.json();
-    } catch {
-      throw new Error(
-        `Не удалось загрузить доступные элементы. HTTP ${response.status}`,
-      );
-    }
-
-    if (isApiError(errorData)) {
-      throw new Error(errorData.message);
-    }
-
-    throw new Error(
-      `Не удалось загрузить доступные элементы. HTTP ${response.status}`,
+    throw new ApiRequestError(
+      "CLIENT_CONFIGURATION_ERROR",
+      "Приложение не настроено для подключения к серверу.",
     );
   }
 
-  const data: unknown = await response.json();
-
-  if (!isAvailableItemsPage(data)) {
-    throw new Error("Сервер вернул некорректный список элементов");
+  if (request.direction === "backward" && request.cursor === null) {
+    throw new ApiRequestError(
+      "CLIENT_VALIDATION_ERROR",
+      "Не удалось определить нужную часть списка. Обновите страницу и попробуйте снова.",
+    );
   }
 
-  let previousId = cursor === null ? 0 : Number(cursor);
+  const query = new URLSearchParams({
+    direction: request.direction,
+  });
+
+  if (request.cursor !== null) {
+    query.set("cursor", request.cursor);
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${apiUrl}/api/items/available?${query}`, {
+      signal,
+      headers: { Accept: "application/json" },
+    });
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+
+    throw new ApiRequestError(
+      "NETWORK_ERROR",
+      "Не удалось связаться с сервером. Проверьте подключение и попробуйте снова.",
+    );
+  }
+
+  if (!response.ok) {
+    throw await readApiErrorResponse(
+      response,
+      "Не удалось выполнить запрос. Попробуйте снова.",
+    );
+  }
+
+  let data: unknown;
+
+  try {
+    data = await response.json();
+  } catch {
+    throw new ApiRequestError(
+      "INVALID_RESPONSE",
+      "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
+    );
+  }
+
+  if (!isAvailableItemsPage(data)) {
+    throw new ApiRequestError(
+      "INVALID_RESPONSE",
+      "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
+    );
+  }
+
+  const boundary = Number(request.cursor ?? 0);
+  let previousId = 0;
 
   for (const id of data.ids) {
-    if (id <= previousId) {
-      throw new Error("Сервер вернул повторяющиеся или неупорядоченные ID");
+    if (
+      id <= previousId ||
+      (request.direction === "forward" ? id <= boundary : id >= boundary)
+    ) {
+      throw new ApiRequestError(
+        "INVALID_PAGE_ORDER",
+        "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
+      );
     }
 
     previousId = id;
   }
 
-  if (
-    data.hasMore &&
-    (data.ids.length !== 20 || data.nextCursor !== String(previousId))
-  ) {
-    throw new Error("Сервер вернул некорректную точку продолжения загрузки");
-  }
+  const hasContinuation =
+    request.direction === "forward" ? data.hasNext : data.hasPrevious;
 
-  if (!data.hasMore && data.nextCursor !== null) {
-    throw new Error("Сервер указал продолжение для уже завершённого списка");
+  if (hasContinuation && data.ids.length !== 20) {
+    throw new ApiRequestError(
+      "INVALID_PAGE_SIZE",
+      "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
+    );
   }
 
   return data;

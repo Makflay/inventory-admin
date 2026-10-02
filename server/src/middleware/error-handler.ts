@@ -22,7 +22,8 @@ export const errorHandler: ErrorRequestHandler = (
   if (status === 400) {
     res.status(400).json({
       error: "INVALID_REQUEST",
-      message: "Некорректный JSON или тело запроса",
+      message:
+        "Не удалось обработать отправленные данные. Проверьте их и попробуйте снова.",
     });
     return;
   }
@@ -30,7 +31,8 @@ export const errorHandler: ErrorRequestHandler = (
   if (status === 413) {
     res.status(413).json({
       error: "PAYLOAD_TOO_LARGE",
-      message: "Тело запроса превышает 100 КБ",
+      message:
+        "Отправлено слишком много данных. Уменьшите их объём и попробуйте снова.",
     });
     return;
   }
@@ -47,6 +49,6 @@ export const errorHandler: ErrorRequestHandler = (
 
   res.status(500).json({
     error: "INTERNAL_SERVER_ERROR",
-    message: "Внутренняя ошибка сервера",
+    message: "На сервере произошла ошибка. Попробуйте снова позже.",
   });
 };

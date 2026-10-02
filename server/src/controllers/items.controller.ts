@@ -1,14 +1,49 @@
 import type { Request, Response } from "express";
+import type { AvailableItemsPageRequest } from "@inventory/shared";
 
 import { itemStore } from "../services/item-store.js";
 
 const MAX_IDS_PER_REQUEST = 1000;
 
+const CURSOR_PATTERN = /^[1-9]\d{0,15}$/;
+
+function parseCursor(
+  value: unknown,
+  parameter: "after" | "before",
+  res: Response,
+): string | null {
+  if (typeof value !== "string" || !CURSOR_PATTERN.test(value)) {
+    res.status(400).json({
+      error: "INVALID_CURSOR",
+      message:
+        "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
+      parameter,
+    });
+
+    return null;
+  }
+
+  const cursor = Number(value);
+
+  if (!Number.isSafeInteger(cursor)) {
+    res.status(400).json({
+      error: "INVALID_CURSOR",
+      message:
+        "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
+      parameter,
+    });
+
+    return null;
+  }
+
+  return value;
+}
+
 export function addItems(req: Request, res: Response): void {
   if (!req.is("application/json")) {
     res.status(415).json({
       error: "UNSUPPORTED_MEDIA_TYPE",
-      message: "Используйте Content-Type: application/json",
+      message: "Не удалось обработать отправленные данные. Попробуйте снова.",
     });
     return;
   }
@@ -24,7 +59,8 @@ export function addItems(req: Request, res: Response): void {
   ) {
     res.status(400).json({
       error: "INVALID_BODY",
-      message: "Ожидается объект с массивом ids",
+      message:
+        "Не удалось обработать список ID. Проверьте данные и попробуйте снова.",
     });
     return;
   }
@@ -34,7 +70,7 @@ export function addItems(req: Request, res: Response): void {
   if (ids.length === 0 || ids.length > MAX_IDS_PER_REQUEST) {
     res.status(400).json({
       error: "INVALID_IDS_COUNT",
-      message: `Передайте от 1 до ${MAX_IDS_PER_REQUEST} ID`,
+      message: `Укажите от 1 до ${MAX_IDS_PER_REQUEST} ID`,
     });
     return;
   }
@@ -45,7 +81,7 @@ export function addItems(req: Request, res: Response): void {
     if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) {
       res.status(400).json({
         error: "INVALID_ID",
-        message: "ID должен быть положительным безопасным целым числом",
+        message: "Каждый ID должен быть положительным целым числом.",
         index,
       });
       return;
@@ -68,7 +104,7 @@ export function addItems(req: Request, res: Response): void {
   if (conflictingIds.size > 0) {
     res.status(409).json({
       error: "ID_CONFLICT",
-      message: "ID уже существуют или повторяются внутри запроса",
+      message: "Некоторые ID уже существуют или повторяются в списке.",
       conflictingIds: [...conflictingIds],
     });
     return;
@@ -84,47 +120,53 @@ export function addItems(req: Request, res: Response): void {
 
 export function getAvailableItems(req: Request, res: Response): void {
   const unsupportedParams = Object.keys(req.query).filter(
-    (key) => key !== "cursor",
+    (key) => key !== "after" && key !== "before",
   );
 
   if (unsupportedParams.length > 0) {
     res.status(400).json({
       error: "INVALID_QUERY",
-      message: "Запрос содержит неподдерживаемые query-параметры",
+      message:
+        "Не удалось загрузить список. Обновите страницу и попробуйте снова.",
       parameters: unsupportedParams,
     });
     return;
   }
 
-  const rawCursor = req.query.cursor;
-  let afterId = 0;
+  const rawAfter = req.query.after;
+  const rawBefore = req.query.before;
 
-  if (rawCursor !== undefined) {
-    if (
-      typeof rawCursor !== "string" ||
-      !/^(0|[1-9]\d{0,15})$/.test(rawCursor)
-    ) {
-      res.status(400).json({
-        error: "INVALID_CURSOR",
-        message:
-          "Начальная точка выборки должна быть целым неотрицательным числом без ведущих нулей",
-      });
-      return;
-    }
-
-    afterId = Number(rawCursor);
-
-    if (!Number.isSafeInteger(afterId)) {
-      res.status(400).json({
-        error: "INVALID_CURSOR",
-        message: "Начальная точка выборки превышает допустимый диапазон",
-      });
-      return;
-    }
+  if (rawAfter !== undefined && rawBefore !== undefined) {
+    res.status(400).json({
+      error: "INVALID_PAGINATION",
+      message:
+        "Не удалось определить нужную часть списка. Обновите страницу и попробуйте снова.",
+    });
+    return;
   }
 
-  const page = itemStore.getAvailablePage(afterId);
+  let pagination: AvailableItemsPageRequest;
+
+  if (rawAfter !== undefined) {
+    const after = parseCursor(rawAfter, "after", res);
+
+    if (after === null) {
+      return;
+    }
+
+    pagination = { after };
+  } else if (rawBefore !== undefined) {
+    const before = parseCursor(rawBefore, "before", res);
+
+    if (before === null) {
+      return;
+    }
+
+    pagination = { before };
+  } else {
+    pagination = {};
+  }
 
   res.setHeader("Cache-Control", "no-store");
-  res.status(200).json(page);
+  res.json(itemStore.getAvailablePage(pagination));
 }
