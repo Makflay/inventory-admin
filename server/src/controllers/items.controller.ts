@@ -1,5 +1,8 @@
 import type { Request, Response } from "express";
-import type { AvailableItemsPageRequest } from "@inventory/shared";
+import type {
+  AvailableItemsPageRequest,
+  SelectedItemsPageRequest,
+} from "@inventory/shared";
 
 import { itemStore } from "../services/item-store.js";
 
@@ -220,12 +223,68 @@ function parseItemId(value: unknown, res: Response): number | null {
   return id;
 }
 
-export function getSelectedItems(_req: Request, res: Response): void {
-  res.setHeader("Cache-Control", "no-store");
+export function getSelectedItems(req: Request, res: Response): void {
+  const unsupportedParams = Object.keys(req.query).filter(
+    (key) => key !== "after" && key !== "before",
+  );
 
-  res.json({
-    ids: itemStore.getSelectedItems(),
-  });
+  if (unsupportedParams.length > 0) {
+    res.status(400).json({
+      error: "INVALID_QUERY",
+      message:
+        "Не удалось загрузить выбранные элементы. Обновите страницу и попробуйте снова.",
+      parameters: unsupportedParams,
+    });
+    return;
+  }
+
+  const rawAfter = req.query.after;
+  const rawBefore = req.query.before;
+
+  if (rawAfter !== undefined && rawBefore !== undefined) {
+    res.status(400).json({
+      error: "INVALID_PAGINATION",
+      message:
+        "Не удалось определить нужную часть списка. Обновите страницу и попробуйте снова.",
+    });
+    return;
+  }
+
+  let pagination: SelectedItemsPageRequest;
+
+  if (rawAfter !== undefined) {
+    const after = parseCursor(rawAfter, "after", res);
+
+    if (after === null) {
+      return;
+    }
+
+    pagination = { after };
+  } else if (rawBefore !== undefined) {
+    const before = parseCursor(rawBefore, "before", res);
+
+    if (before === null) {
+      return;
+    }
+
+    pagination = { before };
+  } else {
+    pagination = {};
+  }
+
+  const page = itemStore.getSelectedPage(pagination);
+
+  if (page === null) {
+    res.status(400).json({
+      error: "INVALID_CURSOR",
+      message:
+        "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
+    });
+    return;
+  }
+
+  res.setHeader("Cache-Control", "no-store");
+  res.json(page);
 }
 
 export function selectItem(req: Request, res: Response): void {
@@ -254,7 +313,8 @@ export function selectItem(req: Request, res: Response): void {
   }
 
   res.json({
-    ids: itemStore.getSelectedItems(),
+    id,
+    selected: true,
   });
 }
 
@@ -276,6 +336,7 @@ export function unselectItem(req: Request, res: Response): void {
   }
 
   res.json({
-    ids: itemStore.getSelectedItems(),
+    id,
+    selected: false,
   });
 }

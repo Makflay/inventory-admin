@@ -27,6 +27,26 @@ export type AvailableItemsPage = {
   pageInfo: AvailableItemsPageInfo;
 };
 
-export type SelectedItems = {
+export type SelectedItemsPageRequest =
+  | {
+      after?: never;
+      before?: never;
+    }
+  | {
+      after: string;
+      before?: never;
+    }
+  | {
+      after?: never;
+      before: string;
+    };
+
+export type SelectedItemsPage = {
   ids: number[];
+  pageInfo: AvailableItemsPageInfo;
+};
+
+export type SelectionMutationResponse = {
+  id: number;
+  selected: boolean;
 };

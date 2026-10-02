@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import {
   Box,
   Container,
@@ -6,63 +6,26 @@ import {
   Paper,
   Stack,
   Typography,
+  Alert,
 } from "@mui/material";
 
+import type { SelectionMutationResponse } from "@inventory/shared";
+
 import { ApiRequestError } from "../api/api-error";
-import {
-  getSelectedItems,
-  selectItem,
-  unselectItem,
-} from "../api/selected-items.api";
+import { selectItem, unselectItem } from "../api/selected-items.api";
 import { AvailableItemsList } from "../components/AvailableItemsList";
 import { SelectedItemsList } from "../components/SelectedItemsList";
 
 export function InventoryPage() {
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [selectedLoading, setSelectedLoading] = useState(true);
   const [mutationPending, setMutationPending] = useState(false);
   const [selectionError, setSelectionError] = useState<string | null>(null);
   const [availableRevision, setAvailableRevision] = useState(0);
+  const [selectedRevision, setSelectedRevision] = useState(0);
   const selectionActionsDisabled = selectedLoading || mutationPending;
 
-  useEffect(() => {
-    const controller = new AbortController();
-    let active = true;
-
-    void getSelectedItems(controller.signal)
-      .then((result) => {
-        if (!active || controller.signal.aborted) {
-          return;
-        }
-
-        setSelectedIds(result.ids);
-        setSelectionError(null);
-      })
-      .catch((error: unknown) => {
-        if (!active || controller.signal.aborted) {
-          return;
-        }
-
-        setSelectionError(
-          error instanceof ApiRequestError
-            ? error.message
-            : "Не удалось загрузить выбранные элементы.",
-        );
-      })
-      .finally(() => {
-        if (active && !controller.signal.aborted) {
-          setSelectedLoading(false);
-        }
-      });
-
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, []);
-
   const applySelectionMutation = useCallback(
-    async (mutation: () => Promise<{ ids: number[] }>) => {
+    async (mutation: () => Promise<SelectionMutationResponse>) => {
       if (selectedLoading || mutationPending) {
         return;
       }
@@ -71,9 +34,11 @@ export function InventoryPage() {
       setSelectionError(null);
 
       try {
-        const result = await mutation();
-        setSelectedIds(result.ids);
+        await mutation();
+        setSelectedLoading(true);
+
         setAvailableRevision((revision) => revision + 1);
+        setSelectedRevision((revision) => revision + 1);
       } catch (error) {
         setSelectionError(
           error instanceof ApiRequestError
@@ -86,6 +51,10 @@ export function InventoryPage() {
     },
     [selectedLoading, mutationPending],
   );
+
+  const handleSelectedInitialLoadSettled = useCallback(() => {
+    setSelectedLoading(false);
+  }, []);
 
   const handleSelect = useCallback(
     async (id: number) => {
@@ -155,11 +124,16 @@ export function InventoryPage() {
 
           <Divider />
 
+          {selectionError !== null && (
+            <Box sx={{ px: 2, pt: 2 }}>
+              <Alert severity="error">{selectionError}</Alert>
+            </Box>
+          )}
+
           <SelectedItemsList
-            ids={selectedIds}
-            loading={selectedLoading}
+            key={selectedRevision}
             mutationPending={selectionActionsDisabled}
-            error={selectionError}
+            onInitialLoadSettled={handleSelectedInitialLoadSettled}
             onUnselect={handleUnselect}
           />
         </Paper>

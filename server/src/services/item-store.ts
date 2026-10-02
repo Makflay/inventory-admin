@@ -1,6 +1,8 @@
 import type {
   AvailableItemsPage,
   AvailableItemsPageRequest,
+  SelectedItemsPage,
+  SelectedItemsPageRequest,
 } from "@inventory/shared";
 
 const BASE_ID_MIN = 1;
@@ -38,10 +40,6 @@ class ItemStore {
     }
   }
 
-  getSelectedItems(): number[] {
-    return [...this.selectedOrder];
-  }
-
   selectItem(id: number): SelectItemResult {
     if (!this.exists(id)) {
       return "not_found";
@@ -52,7 +50,7 @@ class ItemStore {
     }
 
     this.selectedIds.add(id);
-    this.selectedIds.delete(id);
+    this.selectedOrder.push(id);
 
     return "selected";
   }
@@ -67,7 +65,7 @@ class ItemStore {
     const index = this.selectedOrder.indexOf(id);
 
     if (index >= 0) {
-      this.selectedOrder.slice(index, 1);
+      this.selectedOrder.splice(index, 1);
     }
 
     return "unselected";
@@ -193,6 +191,94 @@ class ItemStore {
     };
   }
 
+  private createSelectedPage(
+    ids: number[],
+    startIndex: number,
+    emptyHasNextPage: boolean,
+    emptyHasPreviousPage: boolean,
+  ): SelectedItemsPage {
+    if (ids.length === 0) {
+      return {
+        ids: [],
+        pageInfo: {
+          startCursor: null,
+          endCursor: null,
+          hasNextPage: emptyHasNextPage,
+          hasPreviousPage: emptyHasPreviousPage,
+        },
+      };
+    }
+
+    const endIndex = startIndex + ids.length - 1;
+
+    return {
+      ids,
+      pageInfo: {
+        startCursor: String(ids[0]),
+        endCursor: String(ids[ids.length - 1]),
+        hasNextPage: endIndex < this.selectedOrder.length - 1,
+        hasPreviousPage: startIndex > 0,
+      },
+    };
+  }
+
+  getSelectedPage(
+    request: SelectedItemsPageRequest = {},
+  ): SelectedItemsPage | null {
+    if (request.after !== undefined) {
+      const boundaryId = Number(request.after);
+      const boundaryIndex = this.selectedOrder.indexOf(boundaryId);
+
+      if (boundaryIndex < 0) {
+        return null;
+      }
+
+      const startIndex = boundaryIndex + 1;
+      const ids = this.selectedOrder.slice(startIndex, startIndex + PAGE_SIZE);
+
+      return this.createSelectedPage(ids, startIndex, false, true);
+    }
+
+    if (request.before !== undefined) {
+      const boundaryId = Number(request.before);
+      const boundaryIndex = this.selectedOrder.indexOf(boundaryId);
+
+      if (boundaryIndex < 0) {
+        return null;
+      }
+
+      const startIndex = Math.max(0, boundaryIndex - PAGE_SIZE);
+
+      const ids = this.selectedOrder.slice(startIndex, boundaryIndex);
+
+      return this.createSelectedPage(ids, startIndex, true, false);
+    }
+
+    const ids = this.selectedOrder.slice(0, PAGE_SIZE);
+
+    return this.createSelectedPage(ids, 0, false, false);
+  }
+
+  private isAvailableForSearch(id: number, search: string): boolean {
+    return (
+      this.exists(id) && !this.selectedIds.has(id) && matchesSearch(id, search)
+    );
+  }
+
+  private hasAvailableAtOrBefore(boundary: number, search: string): boolean {
+    return (
+      this.isAvailableForSearch(boundary, search) ||
+      this.collectBefore(boundary, search, 1).length > 0
+    );
+  }
+
+  private hasAvailableAtOrAfter(boundary: number, search: string): boolean {
+    return (
+      this.isAvailableForSearch(boundary, search) ||
+      this.collectAfter(boundary, search, 1).length > 0
+    );
+  }
+
   getAvailablePage(
     request: AvailableItemsPageRequest = {},
   ): AvailableItemsPage {
@@ -206,7 +292,7 @@ class ItemStore {
         ids,
         search,
         false,
-        this.collectBefore(boundary, search, 1).length > 0,
+        this.hasAvailableAtOrBefore(boundary, search),
       );
     }
 
@@ -217,7 +303,7 @@ class ItemStore {
       return this.createPage(
         ids,
         search,
-        this.collectAfter(boundary, search, 1).length > 0,
+        this.hasAvailableAtOrAfter(boundary, search),
         false,
       );
     }
