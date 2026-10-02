@@ -26,3 +26,7 @@ export type AvailableItemsPage = {
   ids: number[];
   pageInfo: AvailableItemsPageInfo;
 };
+
+export type SelectedItems = {
+  ids: number[];
+};

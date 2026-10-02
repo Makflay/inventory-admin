@@ -195,3 +195,87 @@ export function getAvailableItems(req: Request, res: Response): void {
   res.setHeader("Cache-Control", "no-store");
   res.json(itemStore.getAvailablePage(pagination));
 }
+
+function parseItemId(value: unknown, res: Response): number | null {
+  if (typeof value !== "string" || !CURSOR_PATTERN.test(value)) {
+    res.status(400).json({
+      error: "INVALID_ID",
+      message: "Не удалось определить выбранный элемент.",
+    });
+
+    return null;
+  }
+
+  const id = Number(value);
+
+  if (!Number.isSafeInteger(id)) {
+    res.status(400).json({
+      error: "INVALID_ID",
+      message: "Не удалось определить выбранный элемент.",
+    });
+
+    return null;
+  }
+
+  return id;
+}
+
+export function getSelectedItems(_req: Request, res: Response): void {
+  res.setHeader("Cache-Control", "no-store");
+
+  res.json({
+    ids: itemStore.getSelectedItems(),
+  });
+}
+
+export function selectItem(req: Request, res: Response): void {
+  const id = parseItemId(req.params.id, res);
+
+  if (id === null) {
+    return;
+  }
+
+  const result = itemStore.selectItem(id);
+
+  if (result === "not_found") {
+    res.status(404).json({
+      error: "ITEM_NOT_FOUND",
+      message: "Элемент не найден.",
+    });
+    return;
+  }
+
+  if (result === "already_selected") {
+    res.status(409).json({
+      error: "ITEM_ALREADY_SELECTED",
+      message: "Элемент уже выбран.",
+    });
+    return;
+  }
+
+  res.json({
+    ids: itemStore.getSelectedItems(),
+  });
+}
+
+export function unselectItem(req: Request, res: Response): void {
+  const id = parseItemId(req.params.id, res);
+
+  if (id === null) {
+    return;
+  }
+
+  const result = itemStore.unselectItem(id);
+
+  if (result === "not_selected") {
+    res.status(409).json({
+      error: "ITEM_NOT_SELECTED",
+      message: "Элемент уже не находится в выбранных.",
+    });
+    return;
+  }
+
+  res.json({
+    ids: itemStore.getSelectedItems(),
+  });
+}

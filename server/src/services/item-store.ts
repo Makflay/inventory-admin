@@ -15,9 +15,14 @@ function matchesSearch(id: number, search: string): boolean {
   return search === "" || String(id).includes(search);
 }
 
+export type SelectItemResult = "selected" | "not_found" | "already_selected";
+
+export type UnselectItemResult = "unselected" | "not_selected";
+
 class ItemStore {
   private readonly customIds = new Set<number>();
   private readonly selectedIds = new Set<number>();
+  private readonly selectedOrder: number[] = [];
 
   exists(id: number): boolean {
     if (!isValidId(id)) {
@@ -33,16 +38,39 @@ class ItemStore {
     }
   }
 
-  setSelected(id: number, selected: boolean): void {
+  getSelectedItems(): number[] {
+    return [...this.selectedOrder];
+  }
+
+  selectItem(id: number): SelectItemResult {
     if (!this.exists(id)) {
-      throw new RangeError("Указанный элемент не существует");
+      return "not_found";
     }
 
-    if (selected) {
-      this.selectedIds.add(id);
-    } else {
-      this.selectedIds.delete(id);
+    if (this.selectedIds.has(id)) {
+      return "already_selected";
     }
+
+    this.selectedIds.add(id);
+    this.selectedIds.delete(id);
+
+    return "selected";
+  }
+
+  unselectItem(id: number): UnselectItemResult {
+    if (!this.selectedIds.has(id)) {
+      return "not_selected";
+    }
+
+    this.selectedIds.delete(id);
+
+    const index = this.selectedOrder.indexOf(id);
+
+    if (index >= 0) {
+      this.selectedOrder.slice(index, 1);
+    }
+
+    return "unselected";
   }
 
   private collectAfter(

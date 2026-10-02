@@ -3,9 +3,19 @@ import { Box, TextField } from "@mui/material";
 
 import { AvailableItemsResults } from "./AvailableItemsResults";
 
+type AvailableItemsListProps = {
+  availableRevision: number;
+  mutationPending: boolean;
+  onSelect: (id: number) => Promise<void>;
+};
+
 const SEARCH_DEBOUNCE_MS = 300;
 
-export function AvailableItemsList() {
+export function AvailableItemsList({
+  availableRevision,
+  mutationPending,
+  onSelect,
+}: AvailableItemsListProps) {
   const [search, setSearch] = useState("");
   const [inputValue, setInputValue] = useState("");
 
@@ -30,7 +40,7 @@ export function AvailableItemsList() {
           fullWidth
           size="small"
           label="Поиск по ID"
-          value={search}
+          value={inputValue}
           onChange={(event) => {
             setInputValue(event.target.value);
           }}
@@ -43,7 +53,12 @@ export function AvailableItemsList() {
         />
       </Box>
 
-      <AvailableItemsResults key={search} search={search} />
+      <AvailableItemsResults
+        key={JSON.stringify([search, availableRevision])}
+        search={search}
+        mutationPending={mutationPending}
+        onSelect={onSelect}
+      />
     </>
   );
 }

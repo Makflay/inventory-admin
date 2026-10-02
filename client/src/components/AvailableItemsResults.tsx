@@ -120,9 +120,15 @@ function LoadBoundary({
 
 type AvailableItemsResultsProps = {
   search: string;
+  mutationPending: boolean;
+  onSelect: (id: number) => Promise<void>;
 };
 
-export function AvailableItemsResults({ search }: AvailableItemsResultsProps) {
+export function AvailableItemsResults({
+  search,
+  mutationPending,
+  onSelect,
+}: AvailableItemsResultsProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<{
     key: string;
@@ -396,6 +402,17 @@ export function AvailableItemsResults({ search }: AvailableItemsResultsProps) {
                       data-item-id={row.id}
                       data-page-key={row.pageKey}
                       divider
+                      secondaryAction={
+                        <Button
+                          size="small"
+                          disabled={mutationPending}
+                          onClick={() => {
+                            void onSelect(row.id);
+                          }}
+                        >
+                          Выбрать
+                        </Button>
+                      }
                       sx={{
                         height: ROW_HEIGHT,
                         boxSizing: "border-box",
