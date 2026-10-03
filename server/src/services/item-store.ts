@@ -191,9 +191,117 @@ class ItemStore {
     };
   }
 
+  private matchesSelectedSearch(id: number, search: string): boolean {
+    return this.selectedIds.has(id) && matchesSearch(id, search);
+  }
+
+  private hasMatchingSelectedBefore(
+    boundaryIndex: number,
+    search: string,
+  ): boolean {
+    for (let index = boundaryIndex - 1; index >= 0; index--) {
+      const id = this.selectedOrder[index]!;
+
+      if (this.matchesSelectedSearch(id, search)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private hasMatchingSelectedAfter(
+    boundaryIndex: number,
+    search: string,
+  ): boolean {
+    for (
+      let index = boundaryIndex + 1;
+      index < this.selectedOrder.length;
+      index++
+    ) {
+      const id = this.selectedOrder[index]!;
+
+      if (this.matchesSelectedSearch(id, search)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private collectSelectedAfter(
+    boundaryIndex: number,
+    search: string,
+    limit: number,
+  ): {
+    ids: number[];
+    startIndex: number | null;
+    endIndex: number | null;
+  } {
+    const ids: number[] = [];
+    let startIndex: number | null = null;
+    let endIndex: number | null = null;
+
+    for (
+      let index = boundaryIndex + 1;
+      index < this.selectedOrder.length && ids.length < limit;
+      index++
+    ) {
+      const id = this.selectedOrder[index]!;
+
+      if (!this.matchesSelectedSearch(id, search)) {
+        continue;
+      }
+
+      startIndex ??= index;
+      endIndex = index;
+      ids.push(id);
+    }
+
+    return {
+      ids,
+      startIndex,
+      endIndex,
+    };
+  }
+
+  private collectSelectedBefore(
+    boundaryIndex: number,
+    search: string,
+    limit: number,
+  ): {
+    ids: number[];
+    startIndex: number | null;
+    endIndex: number | null;
+  } {
+    const matches: Array<{ id: number; index: number }> = [];
+
+    for (
+      let index = boundaryIndex - 1;
+      index >= 0 && matches.length < limit;
+      index--
+    ) {
+      const id = this.selectedOrder[index]!;
+
+      if (this.matchesSelectedSearch(id, search)) {
+        matches.push({ id, index });
+      }
+    }
+
+    matches.reverse();
+
+    return {
+      ids: matches.map((match) => match.id),
+      startIndex: matches[0]?.index ?? null,
+      endIndex: matches[matches.length - 1]?.index ?? null,
+    };
+  }
+
   private createSelectedPage(
     ids: number[],
-    startIndex: number,
+    startIndex: number | null,
+    endIndex: number | null,
+    search: string,
     emptyHasNextPage: boolean,
     emptyHasPreviousPage: boolean,
   ): SelectedItemsPage {
@@ -209,15 +317,17 @@ class ItemStore {
       };
     }
 
-    const endIndex = startIndex + ids.length - 1;
+    if (startIndex === null || endIndex === null) {
+      throw new Error("Selected page indices are missing");
+    }
 
     return {
       ids,
       pageInfo: {
         startCursor: String(ids[0]),
         endCursor: String(ids[ids.length - 1]),
-        hasNextPage: endIndex < this.selectedOrder.length - 1,
-        hasPreviousPage: startIndex > 0,
+        hasNextPage: this.hasMatchingSelectedAfter(endIndex, search),
+        hasPreviousPage: this.hasMatchingSelectedBefore(startIndex, search),
       },
     };
   }
@@ -225,38 +335,64 @@ class ItemStore {
   getSelectedPage(
     request: SelectedItemsPageRequest = {},
   ): SelectedItemsPage | null {
+    const search = request.search ?? "";
+
     if (request.after !== undefined) {
       const boundaryId = Number(request.after);
       const boundaryIndex = this.selectedOrder.indexOf(boundaryId);
 
-      if (boundaryIndex < 0) {
+      if (
+        boundaryIndex < 0 ||
+        !this.matchesSelectedSearch(boundaryId, search)
+      ) {
         return null;
       }
 
-      const startIndex = boundaryIndex + 1;
-      const ids = this.selectedOrder.slice(startIndex, startIndex + PAGE_SIZE);
+      const page = this.collectSelectedAfter(boundaryIndex, search, PAGE_SIZE);
 
-      return this.createSelectedPage(ids, startIndex, false, true);
+      return this.createSelectedPage(
+        page.ids,
+        page.startIndex,
+        page.endIndex,
+        search,
+        this.hasMatchingSelectedAfter(boundaryIndex, search),
+        true,
+      );
     }
 
     if (request.before !== undefined) {
       const boundaryId = Number(request.before);
       const boundaryIndex = this.selectedOrder.indexOf(boundaryId);
 
-      if (boundaryIndex < 0) {
+      if (
+        boundaryIndex < 0 ||
+        !this.matchesSelectedSearch(boundaryId, search)
+      ) {
         return null;
       }
 
-      const startIndex = Math.max(0, boundaryIndex - PAGE_SIZE);
+      const page = this.collectSelectedBefore(boundaryIndex, search, PAGE_SIZE);
 
-      const ids = this.selectedOrder.slice(startIndex, boundaryIndex);
-
-      return this.createSelectedPage(ids, startIndex, true, false);
+      return this.createSelectedPage(
+        page.ids,
+        page.startIndex,
+        page.endIndex,
+        search,
+        true,
+        this.hasMatchingSelectedBefore(boundaryIndex, search),
+      );
     }
 
-    const ids = this.selectedOrder.slice(0, PAGE_SIZE);
+    const page = this.collectSelectedAfter(-1, search, PAGE_SIZE);
 
-    return this.createSelectedPage(ids, 0, false, false);
+    return this.createSelectedPage(
+      page.ids,
+      page.startIndex,
+      page.endIndex,
+      search,
+      false,
+      false,
+    );
   }
 
   private isAvailableForSearch(id: number, search: string): boolean {

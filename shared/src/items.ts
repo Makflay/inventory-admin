@@ -27,7 +27,9 @@ export type AvailableItemsPage = {
   pageInfo: AvailableItemsPageInfo;
 };
 
-export type SelectedItemsPageRequest =
+export type SelectedItemsPageRequest = {
+  search?: string;
+} & (
   | {
       after?: never;
       before?: never;
@@ -39,7 +41,8 @@ export type SelectedItemsPageRequest =
   | {
       after?: never;
       before: string;
-    };
+    }
+);
 
 export type SelectedItemsPage = {
   ids: number[];

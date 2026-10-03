@@ -225,7 +225,7 @@ function parseItemId(value: unknown, res: Response): number | null {
 
 export function getSelectedItems(req: Request, res: Response): void {
   const unsupportedParams = Object.keys(req.query).filter(
-    (key) => key !== "after" && key !== "before",
+    (key) => key !== "search" && key !== "after" && key !== "before",
   );
 
   if (unsupportedParams.length > 0) {
@@ -235,6 +235,12 @@ export function getSelectedItems(req: Request, res: Response): void {
         "Не удалось загрузить выбранные элементы. Обновите страницу и попробуйте снова.",
       parameters: unsupportedParams,
     });
+    return;
+  }
+
+  const search = parseSearch(req.query.search, res);
+
+  if (search === null) {
     return;
   }
 
@@ -259,7 +265,7 @@ export function getSelectedItems(req: Request, res: Response): void {
       return;
     }
 
-    pagination = { after };
+    pagination = { search, after };
   } else if (rawBefore !== undefined) {
     const before = parseCursor(rawBefore, "before", res);
 
@@ -267,9 +273,9 @@ export function getSelectedItems(req: Request, res: Response): void {
       return;
     }
 
-    pagination = { before };
+    pagination = { search, before };
   } else {
-    pagination = {};
+    pagination = { search };
   }
 
   const page = itemStore.getSelectedPage(pagination);

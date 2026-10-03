@@ -9,6 +9,7 @@ type BoundaryProps = {
   before: string | null;
   after: string | null;
   disabled: boolean;
+  search: string;
   onLoad: (request: SelectedItemsPageRequest) => void;
 };
 
@@ -17,6 +18,7 @@ export function SelectedItemsLoadBoundary({
   before,
   after,
   disabled,
+  search,
   onLoad,
 }: BoundaryProps) {
   const markerRef = useRef<HTMLDivElement | null>(null);
@@ -52,9 +54,9 @@ export function SelectedItemsLoadBoundary({
           (after === null || entry.boundingClientRect.top < midpoint);
 
         if (loadBefore && before !== null) {
-          onLoad({ before });
+          onLoad({ search, before });
         } else if (after !== null) {
-          onLoad({ after });
+          onLoad({ search, after });
         }
       },
       {
@@ -70,7 +72,7 @@ export function SelectedItemsLoadBoundary({
       active = false;
       observer.disconnect();
     };
-  }, [rootRef, before, after, disabled, onLoad]);
+  }, [rootRef, before, after, disabled, search, onLoad]);
 
-  return <Box ref={markerRef} aria-hidden="true" sx={{ height: 24 }} />;
+  return <Box ref={markerRef} aria-hidden="true" sx={{ height: 48 }} />;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 
 import type { SelectedItemsPageRequest } from "@inventory/shared";
 
@@ -6,8 +6,6 @@ import { ApiRequestError } from "../api/api-error";
 import { getSelectedItems } from "../api/selected-items.api";
 import { SelectedItemsCache } from "../services/selected-items-cache";
 import type { CachedSelectedPage } from "../services/selected-items-cache";
-
-const INITIAL_REQUEST: SelectedItemsPageRequest = {};
 
 type LoadError = {
   request: SelectedItemsPageRequest;
@@ -25,12 +23,18 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-export function useSelectedItems(beforeChange: () => Set<string>) {
+export function useSelectedItems(
+  search: string,
+  beforeChange: () => Set<string>,
+) {
+  const initialRequest = useMemo<SelectedItemsPageRequest>(
+    () => ({ search }),
+    [search],
+  );
   const [cache] = useState(() => new SelectedItemsCache());
-
   const [state, setState] = useState<SelectedItemsState>({
     pages: [],
-    loading: INITIAL_REQUEST,
+    loading: initialRequest,
     error: null,
     initialized: false,
   });
@@ -148,7 +152,7 @@ export function useSelectedItems(beforeChange: () => Set<string>) {
 
     void Promise.resolve().then(() => {
       if (!cancelled) {
-        void requestPage(INITIAL_REQUEST);
+        void requestPage(initialRequest);
       }
     });
 
@@ -158,7 +162,7 @@ export function useSelectedItems(beforeChange: () => Set<string>) {
       requestRef.current?.abort();
       requestRef.current = null;
     };
-  }, [requestPage]);
+  }, [requestPage, initialRequest]);
 
   const loadPage = useCallback(
     (request: SelectedItemsPageRequest) => {

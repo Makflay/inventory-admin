@@ -131,7 +131,7 @@ export function InventoryPage() {
           )}
 
           <SelectedItemsList
-            key={selectedRevision}
+            selectedRevision={selectedRevision}
             mutationPending={selectionActionsDisabled}
             onInitialLoadSettled={handleSelectedInitialLoadSettled}
             onUnselect={handleUnselect}
