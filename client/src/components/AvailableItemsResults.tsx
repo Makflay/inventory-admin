@@ -123,10 +123,10 @@ function LoadBoundary({
 type AvailableItemsResultsProps = {
   search: string;
   revision: number;
-  mutationPending: boolean;
+  selectionActionsDisabled: boolean;
   optimisticSelection: OptimisticSelection;
   onReconciled: (revision: number) => void;
-  onSelect: (id: number) => Promise<void>;
+  onSelect: (id: number) => void;
 };
 
 function matchesSearch(id: number, search: string): boolean {
@@ -236,7 +236,7 @@ function insertOptimisticAvailableId(
 export function AvailableItemsResults({
   search,
   revision,
-  mutationPending,
+  selectionActionsDisabled,
   optimisticSelection,
   onReconciled,
   onSelect,
@@ -507,7 +507,13 @@ export function AvailableItemsResults({
               role="listitem"
               data-pending-item-id={id}
               secondaryAction={
-                <Button size="small" disabled>
+                <Button
+                  size="small"
+                  disabled={selectionActionsDisabled}
+                  onClick={() => {
+                    onSelect(id);
+                  }}
+                >
                   Выбрать
                 </Button>
               }
@@ -583,7 +589,7 @@ export function AvailableItemsResults({
                       secondaryAction={
                         <Button
                           size="small"
-                          disabled={mutationPending || row.optimistic}
+                          disabled={selectionActionsDisabled}
                           onClick={() => {
                             void onSelect(row.id);
                           }}

@@ -7,17 +7,17 @@ import { AvailableItemsResults } from "./AvailableItemsResults";
 
 type AvailableItemsListProps = {
   availableRevision: number;
-  mutationPending: boolean;
+  selectionActionsDisabled: boolean;
   optimisticSelection: OptimisticSelection;
   onReconciled: (revision: number) => void;
-  onSelect: (id: number) => Promise<void>;
+  onSelect: (id: number) => void;
 };
 
 const SEARCH_DEBOUNCE_MS = 300;
 
 export function AvailableItemsList({
   availableRevision,
-  mutationPending,
+  selectionActionsDisabled,
   optimisticSelection,
   onReconciled,
   onSelect,
@@ -63,7 +63,7 @@ export function AvailableItemsList({
         key={JSON.stringify([search, availableRevision])}
         search={search}
         revision={availableRevision}
-        mutationPending={mutationPending}
+        selectionActionsDisabled={selectionActionsDisabled}
         optimisticSelection={optimisticSelection}
         onReconciled={onReconciled}
         onSelect={onSelect}

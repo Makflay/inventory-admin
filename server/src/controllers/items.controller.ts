@@ -2,6 +2,8 @@ import type { Request, Response } from "express";
 import type {
   AvailableItemsPageRequest,
   SelectedItemsPageRequest,
+  SelectionBatchResponse,
+  SelectionBatchResult,
 } from "@inventory/shared";
 
 import { itemStore } from "../services/item-store.js";
@@ -10,6 +12,121 @@ const MAX_IDS_PER_REQUEST = 1000;
 
 const CURSOR_PATTERN = /^[1-9]\d{0,15}$/;
 const SEARCH_PATTERN = /^[1-9]\d*$/;
+
+type ValidatedSelectionBatchOperation = {
+  id: number;
+  selected: boolean;
+};
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseSelectionBatch(
+  body: unknown,
+  res: Response,
+): ValidatedSelectionBatchOperation[] | null {
+  if (
+    !isObject(body) ||
+    !("operations" in body) ||
+    !Array.isArray(body.operations) ||
+    body.operations.length === 0
+  ) {
+    res.status(400).json({
+      error: "INVALID_SELECTION_BATCH",
+      message:
+        "Не удалось обработать изменения выбора. Проверьте данные и попробуйте снова.",
+    });
+
+    return null;
+  }
+
+  const operations: ValidatedSelectionBatchOperation[] = [];
+  const seenIds = new Set<number>();
+
+  for (const value of body.operations) {
+    if (
+      !isObject(value) ||
+      !("id" in value) ||
+      typeof value.id !== "number" ||
+      !Number.isSafeInteger(value.id) ||
+      value.id <= 0 ||
+      !("selected" in value) ||
+      typeof value.selected !== "boolean"
+    ) {
+      res.status(400).json({
+        error: "INVALID_SELECTION_OPERATION",
+        message:
+          "Не удалось обработать одно из изменений выбора. Проверьте данные и попробуйте снова.",
+      });
+
+      return null;
+    }
+
+    if (seenIds.has(value.id)) {
+      res.status(400).json({
+        error: "DUPLICATE_SELECTION_OPERATION",
+        message:
+          "Для одного элемента передано несколько изменений. Попробуйте снова.",
+      });
+
+      return null;
+    }
+
+    seenIds.add(value.id);
+
+    operations.push({
+      id: value.id,
+      selected: value.selected,
+    });
+  }
+
+  return operations;
+}
+
+export function updateSelectionBatch(req: Request, res: Response): void {
+  if (!req.is("application/json")) {
+    res.status(415).json({
+      error: "UNSUPPORTED_MEDIA_TYPE",
+      message: "Не удалось обработать изменения выбора. Попробуйте снова.",
+    });
+
+    return;
+  }
+
+  const operations = parseSelectionBatch(req.body, res);
+
+  if (operations === null) {
+    return;
+  }
+
+  const results: SelectionBatchResult[] = operations.map(({ id, selected }) => {
+    const result = itemStore.setSelection(id, selected);
+
+    if (result === "not_found") {
+      return {
+        id,
+        selected,
+        success: false,
+        error: "ITEM_NOT_FOUND",
+        message: "Элемент не найден.",
+      };
+    }
+
+    return {
+      id,
+      selected,
+      success: true,
+    };
+  });
+
+  const response: SelectionBatchResponse = {
+    results,
+  };
+
+  res.setHeader("Cache-Control", "no-store");
+  res.json(response);
+}
 
 function parseCursor(
   value: unknown,
@@ -291,58 +408,4 @@ export function getSelectedItems(req: Request, res: Response): void {
 
   res.setHeader("Cache-Control", "no-store");
   res.json(page);
-}
-
-export function selectItem(req: Request, res: Response): void {
-  const id = parseItemId(req.params.id, res);
-
-  if (id === null) {
-    return;
-  }
-
-  const result = itemStore.selectItem(id);
-
-  if (result === "not_found") {
-    res.status(404).json({
-      error: "ITEM_NOT_FOUND",
-      message: "Элемент не найден.",
-    });
-    return;
-  }
-
-  if (result === "already_selected") {
-    res.status(409).json({
-      error: "ITEM_ALREADY_SELECTED",
-      message: "Элемент уже выбран.",
-    });
-    return;
-  }
-
-  res.json({
-    id,
-    selected: true,
-  });
-}
-
-export function unselectItem(req: Request, res: Response): void {
-  const id = parseItemId(req.params.id, res);
-
-  if (id === null) {
-    return;
-  }
-
-  const result = itemStore.unselectItem(id);
-
-  if (result === "not_selected") {
-    res.status(409).json({
-      error: "ITEM_NOT_SELECTED",
-      message: "Элемент уже не находится в выбранных.",
-    });
-    return;
-  }
-
-  res.json({
-    id,
-    selected: false,
-  });
 }

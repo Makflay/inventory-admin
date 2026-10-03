@@ -9,16 +9,16 @@ const SEARCH_DEBOUNCE_MS = 300;
 
 type SelectedItemsListProps = {
   selectedRevision: number;
-  mutationPending: boolean;
+  selectionActionsDisabled: boolean;
   optimisticSelection: OptimisticSelection;
   onInitialLoadSettled: () => void;
   onReconciled: (revision: number) => void;
-  onUnselect: (id: number) => Promise<void>;
+  onUnselect: (id: number) => void;
 };
 
 export function SelectedItemsList({
   selectedRevision,
-  mutationPending,
+  selectionActionsDisabled,
   optimisticSelection,
   onInitialLoadSettled,
   onReconciled,
@@ -65,7 +65,7 @@ export function SelectedItemsList({
         key={JSON.stringify([search, selectedRevision])}
         search={search}
         revision={selectedRevision}
-        mutationPending={mutationPending}
+        selectionActionsDisabled={selectionActionsDisabled}
         optimisticSelection={optimisticSelection}
         onInitialLoadSettled={onInitialLoadSettled}
         onReconciled={onReconciled}

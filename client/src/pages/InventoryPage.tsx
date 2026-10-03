@@ -1,4 +1,4 @@
-import { useCallback, useState, useEffect, useRef } from "react";
+import { useCallback, useState } from "react";
 import {
   Box,
   Container,
@@ -7,203 +7,51 @@ import {
   Stack,
   Typography,
   Alert,
+  Button,
 } from "@mui/material";
 
-import type { SelectionMutationResponse } from "@inventory/shared";
-import type {
-  OptimisticSelectionOperation,
-  SelectionAction,
-} from "../types/selection";
-
-import { ApiRequestError } from "../api/api-error";
-import { selectItem, unselectItem } from "../api/selected-items.api";
+import { useSelectionMutationQueue } from "../hooks/useSelectionMutationQueue";
 import { AvailableItemsList } from "../components/AvailableItemsList";
 import { SelectedItemsList } from "../components/SelectedItemsList";
 
 export function InventoryPage() {
   const [selectedLoading, setSelectedLoading] = useState(true);
-  const [optimisticSelection, setOptimisticSelection] = useState<
-    Map<number, OptimisticSelectionOperation>
-  >(() => new Map());
-  const mutationInFlightRef = useRef(false);
-  const [selectionError, setSelectionError] = useState<string | null>(null);
-  const [availableRevision, setAvailableRevision] = useState(0);
-  const [selectedRevision, setSelectedRevision] = useState(0);
-  const mutationPending = optimisticSelection.size > 0;
-  const selectionActionsDisabled = selectedLoading || mutationPending;
-
-  useEffect(() => {
-    mutationInFlightRef.current = optimisticSelection.size > 0;
-  }, [optimisticSelection]);
-
-  const handleAvailableReconciled = useCallback((revision: number) => {
-    setOptimisticSelection((previous) => {
-      let changed = false;
-      const next = new Map(previous);
-
-      for (const [id, operation] of next) {
-        if (
-          operation.phase !== "reconciling" ||
-          operation.availableRevision !== revision ||
-          operation.availableReconciled
-        ) {
-          continue;
-        }
-
-        const updatedOperation: OptimisticSelectionOperation = {
-          ...operation,
-          availableReconciled: true,
-        };
-
-        if (updatedOperation.selectedReconciled) {
-          next.delete(id);
-        } else {
-          next.set(id, updatedOperation);
-        }
-        changed = true;
-      }
-
-      return changed ? next : previous;
-    });
-  }, []);
-
-  const handleSelectedReconciled = useCallback((revision: number) => {
-    setOptimisticSelection((previous) => {
-      let changed = false;
-      const next = new Map(previous);
-
-      for (const [id, operation] of next) {
-        if (
-          operation.phase !== "reconciling" ||
-          operation.selectedRevision !== revision ||
-          operation.selectedReconciled
-        ) {
-          continue;
-        }
-
-        const updatedOperation: OptimisticSelectionOperation = {
-          ...operation,
-          selectedReconciled: true,
-        };
-
-        if (updatedOperation.availableReconciled) {
-          next.delete(id);
-        } else {
-          next.set(id, updatedOperation);
-        }
-
-        changed = true;
-      }
-
-      return changed ? next : previous;
-    });
-  }, []);
-
-  const applySelectionMutation = useCallback(
-    async (
-      id: number,
-      action: SelectionAction,
-      mutation: () => Promise<SelectionMutationResponse>,
-    ) => {
-      if (selectedLoading || mutationInFlightRef.current) {
-        return;
-      }
-
-      mutationInFlightRef.current = true;
-      setSelectionError(null);
-
-      setOptimisticSelection((previous) => {
-        const next = new Map(previous);
-
-        next.set(id, {
-          action,
-          phase: "pending",
-          availableRevision: null,
-          selectedRevision: null,
-          availableReconciled: false,
-          selectedReconciled: false,
-        });
-
-        return next;
-      });
-
-      try {
-        const response = await mutation();
-        const expectedSelected = action === "select";
-
-        if (response.id !== id || response.selected !== expectedSelected) {
-          throw new ApiRequestError(
-            "INVALID_RESPONSE",
-            "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
-          );
-        }
-
-        const nextAvailableRevision = availableRevision + 1;
-        const nextSelectedRevision = selectedRevision + 1;
-
-        setOptimisticSelection((previous) => {
-          const operation = previous.get(id);
-
-          if (operation === undefined) {
-            return previous;
-          }
-
-          const next = new Map(previous);
-
-          next.set(id, {
-            ...operation,
-            phase: "reconciling",
-            availableRevision: nextAvailableRevision,
-            selectedRevision: nextSelectedRevision,
-            availableReconciled: false,
-            selectedReconciled: false,
-          });
-
-          return next;
-        });
-
-        setSelectedLoading(true);
-        setAvailableRevision(nextAvailableRevision);
-        setSelectedRevision(nextSelectedRevision);
-      } catch (error) {
-        setOptimisticSelection((previous) => {
-          if (!previous.has(id)) {
-            return previous;
-          }
-
-          const next = new Map(previous);
-          next.delete(id);
-          return next;
-        });
-
-        mutationInFlightRef.current = false;
-
-        setSelectionError(
-          error instanceof ApiRequestError
-            ? error.message
-            : "Не удалось изменить выбор. Попробуйте снова.",
-        );
-      }
-    },
-    [selectedLoading, availableRevision, selectedRevision],
-  );
+  const {
+    optimisticSelection,
+    availableRevision,
+    selectedRevision,
+    error: selectionError,
+    queueSelection,
+    retry: retrySelectionBatch,
+    confirmAvailableRevision,
+    confirmSelectedRevision,
+  } = useSelectionMutationQueue();
+  const selectionActionsDisabled = selectedLoading;
 
   const handleSelectedInitialLoadSettled = useCallback(() => {
     setSelectedLoading(false);
   }, []);
 
   const handleSelect = useCallback(
-    async (id: number) => {
-      await applySelectionMutation(id, "select", () => selectItem(id));
+    (id: number) => {
+      if (selectedLoading) {
+        return;
+      }
+
+      queueSelection(id, true);
     },
-    [applySelectionMutation],
+    [selectedLoading, queueSelection],
   );
 
   const handleUnselect = useCallback(
-    async (id: number) => {
-      await applySelectionMutation(id, "unselect", () => unselectItem(id));
+    (id: number) => {
+      if (selectedLoading) {
+        return;
+      }
+
+      queueSelection(id, false);
     },
-    [applySelectionMutation],
+    [selectedLoading, queueSelection],
   );
 
   return (
@@ -236,9 +84,9 @@ export function InventoryPage() {
           <Divider />
           <AvailableItemsList
             availableRevision={availableRevision}
-            mutationPending={selectionActionsDisabled}
+            selectionActionsDisabled={selectionActionsDisabled}
             optimisticSelection={optimisticSelection}
-            onReconciled={handleAvailableReconciled}
+            onReconciled={confirmAvailableRevision}
             onSelect={handleSelect}
           />
         </Paper>
@@ -264,16 +112,27 @@ export function InventoryPage() {
 
           {selectionError !== null && (
             <Box sx={{ px: 2, pt: 2 }}>
-              <Alert severity="error">{selectionError}</Alert>
+              <Alert
+                severity="error"
+                action={
+                  selectionError.retryable ? (
+                    <Button color="inherit" onClick={retrySelectionBatch}>
+                      Повторить
+                    </Button>
+                  ) : undefined
+                }
+              >
+                {selectionError.message}
+              </Alert>
             </Box>
           )}
 
           <SelectedItemsList
             selectedRevision={selectedRevision}
-            mutationPending={selectionActionsDisabled}
+            selectionActionsDisabled={selectionActionsDisabled}
             optimisticSelection={optimisticSelection}
             onInitialLoadSettled={handleSelectedInitialLoadSettled}
-            onReconciled={handleSelectedReconciled}
+            onReconciled={confirmSelectedRevision}
             onUnselect={handleUnselect}
           />
         </Paper>

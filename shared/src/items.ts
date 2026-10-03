@@ -49,7 +49,33 @@ export type SelectedItemsPage = {
   pageInfo: AvailableItemsPageInfo;
 };
 
-export type SelectionMutationResponse = {
+export type SelectionBatchOperation = {
   id: number;
   selected: boolean;
+};
+
+export type SelectionBatchRequest = {
+  operations: SelectionBatchOperation[];
+};
+
+export type SelectionBatchSuccess = {
+  id: number;
+  selected: boolean;
+  success: true;
+};
+
+export type SelectionBatchFailure = {
+  id: number;
+  selected: boolean;
+  success: false;
+  error: string;
+  message: string;
+};
+
+export type SelectionBatchResult =
+  | SelectionBatchSuccess
+  | SelectionBatchFailure;
+
+export type SelectionBatchResponse = {
+  results: SelectionBatchResult[];
 };

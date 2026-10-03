@@ -17,9 +17,7 @@ function matchesSearch(id: number, search: string): boolean {
   return search === "" || String(id).includes(search);
 }
 
-export type SelectItemResult = "selected" | "not_found" | "already_selected";
-
-export type UnselectItemResult = "unselected" | "not_selected";
+export type SetSelectionResult = "updated" | "unchanged" | "not_found";
 
 class ItemStore {
   private readonly customIds = new Set<number>();
@@ -40,24 +38,22 @@ class ItemStore {
     }
   }
 
-  selectItem(id: number): SelectItemResult {
+  setSelection(id: number, selected: boolean): SetSelectionResult {
     if (!this.exists(id)) {
       return "not_found";
     }
 
-    if (this.selectedIds.has(id)) {
-      return "already_selected";
+    const currentlySelected = this.selectedIds.has(id);
+
+    if (currentlySelected === selected) {
+      return "unchanged";
     }
 
-    this.selectedIds.add(id);
-    this.selectedOrder.push(id);
+    if (selected) {
+      this.selectedIds.add(id);
+      this.selectedOrder.push(id);
 
-    return "selected";
-  }
-
-  unselectItem(id: number): UnselectItemResult {
-    if (!this.selectedIds.has(id)) {
-      return "not_selected";
+      return "updated";
     }
 
     this.selectedIds.delete(id);
@@ -68,7 +64,7 @@ class ItemStore {
       this.selectedOrder.splice(index, 1);
     }
 
-    return "unselected";
+    return "updated";
   }
 
   private collectAfter(

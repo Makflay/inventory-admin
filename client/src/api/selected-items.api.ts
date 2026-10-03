@@ -1,12 +1,123 @@
 import type {
   SelectedItemsPage,
   SelectedItemsPageRequest,
-  SelectionMutationResponse,
+  SelectionBatchRequest,
+  SelectionBatchResponse,
+  SelectionBatchResult,
 } from "@inventory/shared";
 
 import { ApiRequestError, readApiErrorResponse } from "./api-error";
 
 const PAGE_SIZE = 20;
+
+export class SelectionBatchRejectedError extends ApiRequestError {
+  constructor(error: string, message: string) {
+    super(error, message);
+    this.name = "SelectionBatchRejectedError";
+  }
+}
+
+function isSelectionBatchResult(value: unknown): value is SelectionBatchResult {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("id" in value) ||
+    typeof value.id !== "number" ||
+    !Number.isSafeInteger(value.id) ||
+    value.id <= 0 ||
+    !("selected" in value) ||
+    typeof value.selected !== "boolean" ||
+    !("success" in value) ||
+    typeof value.success !== "boolean"
+  ) {
+    return false;
+  }
+
+  if (value.success) {
+    return true;
+  }
+
+  return (
+    "error" in value &&
+    typeof value.error === "string" &&
+    value.error.trim().length > 0 &&
+    "message" in value &&
+    typeof value.message === "string" &&
+    value.message.trim().length > 0
+  );
+}
+
+function isSelectionBatchResponse(
+  value: unknown,
+  request: SelectionBatchRequest,
+): value is SelectionBatchResponse {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("results" in value) ||
+    !Array.isArray(value.results) ||
+    value.results.length !== request.operations.length
+  ) {
+    return false;
+  }
+
+  return value.results.every((result, index) => {
+    const operation = request.operations[index];
+
+    return (
+      operation !== undefined &&
+      isSelectionBatchResult(result) &&
+      result.id === operation.id &&
+      result.selected === operation.selected
+    );
+  });
+}
+
+export async function updateSelectionBatch(
+  request: SelectionBatchRequest,
+): Promise<SelectionBatchResponse> {
+  let response: Response;
+
+  try {
+    response = await fetch(`${getApiUrl()}/api/items/selection-batch`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(request),
+    });
+  } catch {
+    throw new ApiRequestError(
+      "NETWORK_ERROR",
+      "Не удалось связаться с сервером. Проверьте подключение и попробуйте снова.",
+    );
+  }
+
+  if (!response.ok) {
+    const error = await readApiErrorResponse(
+      response,
+      "Не удалось сохранить изменения выбора. Попробуйте снова.",
+    );
+
+    if (response.status >= 400 && response.status < 500) {
+      throw new SelectionBatchRejectedError(error.error, error.message);
+    }
+
+    throw error;
+  }
+
+  const data = await parseJson(response);
+
+  if (!isSelectionBatchResponse(data, request)) {
+    throw new ApiRequestError(
+      "INVALID_RESPONSE",
+      "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
+    );
+  }
+
+  return data;
+}
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
@@ -66,20 +177,20 @@ function isSelectedItemsPage(value: unknown): value is SelectedItemsPage {
   );
 }
 
-function isSelectionMutationResponse(
-  value: unknown,
-): value is SelectionMutationResponse {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "id" in value &&
-    typeof value.id === "number" &&
-    Number.isSafeInteger(value.id) &&
-    value.id > 0 &&
-    "selected" in value &&
-    typeof value.selected === "boolean"
-  );
-}
+// function isSelectionMutationResponse(
+//   value: unknown,
+// ): value is SelectionMutationResponse {
+//   return (
+//     typeof value === "object" &&
+//     value !== null &&
+//     "id" in value &&
+//     typeof value.id === "number" &&
+//     Number.isSafeInteger(value.id) &&
+//     value.id > 0 &&
+//     "selected" in value &&
+//     typeof value.selected === "boolean"
+//   );
+// }
 
 function getApiUrl(): string {
   const apiUrl = import.meta.env.VITE_API_URL?.trim().replace(/\/+$/, "");
@@ -178,55 +289,55 @@ export async function getSelectedItems(
   return data;
 }
 
-async function mutateSelection(
-  id: number,
-  selected: boolean,
-): Promise<SelectionMutationResponse> {
-  let response: Response;
+// async function mutateSelection(
+//   id: number,
+//   selected: boolean,
+// ): Promise<SelectionMutationResponse> {
+//   let response: Response;
 
-  try {
-    response = await fetch(`${getApiUrl()}/api/items/${id}/selection`, {
-      method: selected ? "POST" : "DELETE",
-      headers: { Accept: "application/json" },
-    });
-  } catch {
-    throw new ApiRequestError(
-      "NETWORK_ERROR",
-      "Не удалось связаться с сервером. Проверьте подключение и попробуйте снова.",
-    );
-  }
+//   try {
+//     response = await fetch(`${getApiUrl()}/api/items/${id}/selection`, {
+//       method: selected ? "POST" : "DELETE",
+//       headers: { Accept: "application/json" },
+//     });
+//   } catch {
+//     throw new ApiRequestError(
+//       "NETWORK_ERROR",
+//       "Не удалось связаться с сервером. Проверьте подключение и попробуйте снова.",
+//     );
+//   }
 
-  if (!response.ok) {
-    throw await readApiErrorResponse(
-      response,
-      "Не удалось изменить выбор. Попробуйте снова.",
-    );
-  }
+//   if (!response.ok) {
+//     throw await readApiErrorResponse(
+//       response,
+//       "Не удалось изменить выбор. Попробуйте снова.",
+//     );
+//   }
 
-  const data = await parseJson(response);
+//   const data = await parseJson(response);
 
-  if (
-    !isSelectionMutationResponse(data) ||
-    data.id !== id ||
-    data.selected !== selected
-  ) {
-    throw new ApiRequestError(
-      "INVALID_RESPONSE",
-      "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
-    );
-  }
+//   if (
+//     !isSelectionMutationResponse(data) ||
+//     data.id !== id ||
+//     data.selected !== selected
+//   ) {
+//     throw new ApiRequestError(
+//       "INVALID_RESPONSE",
+//       "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
+//     );
+//   }
 
-  return data;
-}
+//   return data;
+// }
 
-export async function selectItem(
-  id: number,
-): Promise<SelectionMutationResponse> {
-  return mutateSelection(id, true);
-}
+// export async function selectItem(
+//   id: number,
+// ): Promise<SelectionMutationResponse> {
+//   return mutateSelection(id, true);
+// }
 
-export async function unselectItem(
-  id: number,
-): Promise<SelectionMutationResponse> {
-  return mutateSelection(id, false);
-}
+// export async function unselectItem(
+//   id: number,
+// ): Promise<SelectionMutationResponse> {
+//   return mutateSelection(id, false);
+// }

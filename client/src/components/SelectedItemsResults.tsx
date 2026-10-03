@@ -52,11 +52,11 @@ type VirtualRow = ItemRow | BoundaryRow | EndRow;
 type SelectedItemsResultsProps = {
   search: string;
   revision: number;
-  mutationPending: boolean;
+  selectionActionsDisabled: boolean;
   optimisticSelection: OptimisticSelection;
   onInitialLoadSettled: () => void;
   onReconciled: (revision: number) => void;
-  onUnselect: (id: number) => Promise<void>;
+  onUnselect: (id: number) => void;
 };
 
 function matchesSearch(id: number, search: string): boolean {
@@ -66,7 +66,7 @@ function matchesSearch(id: number, search: string): boolean {
 export function SelectedItemsResults({
   search,
   revision,
-  mutationPending,
+  selectionActionsDisabled,
   optimisticSelection,
   onInitialLoadSettled,
   onReconciled,
@@ -381,7 +381,13 @@ export function SelectedItemsResults({
               role="listitem"
               data-pending-item-id={id}
               secondaryAction={
-                <Button size="small" disabled>
+                <Button
+                  size="small"
+                  disabled={selectionActionsDisabled}
+                  onClick={() => {
+                    onUnselect(id);
+                  }}
+                >
                   Убрать
                 </Button>
               }
@@ -457,7 +463,7 @@ export function SelectedItemsResults({
                       secondaryAction={
                         <Button
                           size="small"
-                          disabled={mutationPending || row.optimistic}
+                          disabled={selectionActionsDisabled}
                           onClick={() => {
                             void onUnselect(row.id);
                           }}
