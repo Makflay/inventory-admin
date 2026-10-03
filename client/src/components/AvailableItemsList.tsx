@@ -2,23 +2,28 @@ import { useState, useEffect } from "react";
 import { Box, TextField } from "@mui/material";
 
 import type { OptimisticSelection } from "../types/selection";
+import type { PendingAdditions } from "../types/add-items";
 
 import { AvailableItemsResults } from "./AvailableItemsResults";
 
 type AvailableItemsListProps = {
-  availableRevision: number;
+  selectionAvailableRevision: number;
+  additionAvailableRevision: number;
   selectionActionsDisabled: boolean;
   optimisticSelection: OptimisticSelection;
-  onReconciled: (revision: number) => void;
+  pendingAdditions: PendingAdditions;
+  onReconciled: (selectionRevision: number, additionRevision: number) => void;
   onSelect: (id: number) => void;
 };
 
 const SEARCH_DEBOUNCE_MS = 300;
 
 export function AvailableItemsList({
-  availableRevision,
+  selectionAvailableRevision,
+  additionAvailableRevision,
   selectionActionsDisabled,
   optimisticSelection,
+  pendingAdditions,
   onReconciled,
   onSelect,
 }: AvailableItemsListProps) {
@@ -60,11 +65,17 @@ export function AvailableItemsList({
       </Box>
 
       <AvailableItemsResults
-        key={JSON.stringify([search, availableRevision])}
+        key={JSON.stringify([
+          search,
+          selectionAvailableRevision,
+          additionAvailableRevision,
+        ])}
         search={search}
-        revision={availableRevision}
+        selectionRevision={selectionAvailableRevision}
+        additionRevision={additionAvailableRevision}
         selectionActionsDisabled={selectionActionsDisabled}
         optimisticSelection={optimisticSelection}
+        pendingAdditions={pendingAdditions}
         onReconciled={onReconciled}
         onSelect={onSelect}
       />

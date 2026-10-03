@@ -4,11 +4,11 @@ import type {
   SelectedItemsPageRequest,
   SelectionBatchResponse,
   SelectionBatchResult,
+  AddItemBatchResult,
+  AddItemsBatchResponse,
 } from "@inventory/shared";
 
 import { itemStore } from "../services/item-store.js";
-
-const MAX_IDS_PER_REQUEST = 1000;
 
 const CURSOR_PATTERN = /^[1-9]\d{0,15}$/;
 const SEARCH_PATTERN = /^[1-9]\d*$/;
@@ -187,74 +187,75 @@ export function addItems(req: Request, res: Response): void {
     return;
   }
 
-  const body: unknown = req.body;
+  //const body: unknown = req.body;
 
   if (
-    typeof body !== "object" ||
-    body === null ||
-    Array.isArray(body) ||
-    !("ids" in body) ||
-    !Array.isArray(body.ids)
+    !isObject(req.body) ||
+    !("ids" in req.body) ||
+    !Array.isArray(req.body.ids) ||
+    req.body.ids.length === 0
   ) {
     res.status(400).json({
-      error: "INVALID_BODY",
+      error: "INVALID_ADDITION_BATCH",
       message:
-        "Не удалось обработать список ID. Проверьте данные и попробуйте снова.",
+        "Не удалось обработать список добавляемых элементов. Проверьте данные и попробуйте снова.",
     });
     return;
   }
 
-  const ids: unknown[] = body.ids;
+  const ids: unknown[] = req.body.ids;
 
-  if (ids.length === 0 || ids.length > MAX_IDS_PER_REQUEST) {
+  if (ids.some((id) => typeof id !== "number")) {
     res.status(400).json({
-      error: "INVALID_IDS_COUNT",
-      message: `Укажите от 1 до ${MAX_IDS_PER_REQUEST} ID`,
+      error: "INVALID_ADDITION_BATCH",
+      message:
+        "Не удалось обработать список добавляемых элементов. Проверьте данные и попробуйте снова.",
     });
+
     return;
   }
 
-  const validatedIds: number[] = [];
+  const numericIds = ids as number[];
+  const seenIds = new Set<number>();
 
-  for (const [index, id] of ids.entries()) {
-    if (typeof id !== "number" || !Number.isSafeInteger(id) || id <= 0) {
+  for (const id of numericIds) {
+    if (seenIds.has(id)) {
       res.status(400).json({
-        error: "INVALID_ID",
-        message: "Каждый ID должен быть положительным целым числом.",
-        index,
+        error: "DUPLICATE_ADDITION_ID",
+        message:
+          "Один и тот же элемент указан несколько раз. Удалите повторения и попробуйте снова.",
       });
+
       return;
     }
 
-    validatedIds.push(id);
+    seenIds.add(id);
   }
 
-  const incomingIds = new Set<number>();
-  const conflictingIds = new Set<number>();
-
-  for (const id of validatedIds) {
-    if (itemStore.exists(id) || incomingIds.has(id)) {
-      conflictingIds.add(id);
+  const results: AddItemBatchResult[] = numericIds.map((id) => {
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      return {
+        id,
+        status: "rejected",
+        error: "INVALID_ID",
+        message: "ID должен быть положительным целым числом.",
+      };
     }
 
-    incomingIds.add(id);
-  }
+    const status = itemStore.add(id);
 
-  if (conflictingIds.size > 0) {
-    res.status(409).json({
-      error: "ID_CONFLICT",
-      message: "Некоторые ID уже существуют или повторяются в списке.",
-      conflictingIds: [...conflictingIds],
-    });
-    return;
-  }
-
-  itemStore.addMany(incomingIds);
-
-  res.status(201).json({
-    addedIds: [...incomingIds],
-    addedCount: incomingIds.size,
+    return {
+      id,
+      status,
+    };
   });
+
+  const response: AddItemsBatchResponse = {
+    results,
+  };
+
+  res.setHeader("Cache-Control", "no-store");
+  res.json(response);
 }
 
 export function getAvailableItems(req: Request, res: Response): void {

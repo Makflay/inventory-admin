@@ -20,6 +20,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { AvailableItemsPageRequest } from "@inventory/shared";
 import type { OptimisticSelection } from "../types/selection";
+import type { PendingAdditions } from "../types/add-items";
 
 import { useAvailableItems } from "../hooks/useAvailableItems";
 import { areAdjacent } from "../services/available-items-cache";
@@ -42,6 +43,7 @@ type ItemRow = {
   id: number;
   pageKey: string | null;
   optimistic: boolean;
+  pendingAddition: boolean;
 };
 
 type BoundaryRow = {
@@ -54,6 +56,22 @@ type BoundaryRow = {
 type EndRow = {
   kind: "end";
   key: string;
+};
+
+type DetachedPendingRow = {
+  id: number;
+  source: "selection" | "addition";
+};
+
+type AvailableItemsResultsProps = {
+  search: string;
+  selectionRevision: number;
+  additionRevision: number;
+  selectionActionsDisabled: boolean;
+  optimisticSelection: OptimisticSelection;
+  pendingAdditions: PendingAdditions;
+  onReconciled: (selectionRevision: number, additionRevision: number) => void;
+  onSelect: (id: number) => void;
 };
 
 type VirtualRow = ItemRow | BoundaryRow | EndRow;
@@ -120,27 +138,28 @@ function LoadBoundary({
   return <Box ref={markerRef} aria-hidden="true" sx={{ height: ROW_HEIGHT }} />;
 }
 
-type AvailableItemsResultsProps = {
-  search: string;
-  revision: number;
-  selectionActionsDisabled: boolean;
-  optimisticSelection: OptimisticSelection;
-  onReconciled: (revision: number) => void;
-  onSelect: (id: number) => void;
-};
-
 function matchesSearch(id: number, search: string): boolean {
   return search === "" || String(id).includes(search);
 }
 
-function insertOptimisticAvailableId(
+function insertPresentationAvailableId(
   rows: VirtualRow[],
   id: number,
   initialized: boolean,
+  source: "selection" | "addition",
 ): boolean {
   if (rows.some((row) => row.kind === "item" && row.id === id)) {
     return true;
   }
+
+  const createRow = (): ItemRow => ({
+    kind: "item",
+    key: `${source}-pending-item:${id}`,
+    id,
+    pageKey: null,
+    optimistic: source === "selection",
+    pendingAddition: source === "addition",
+  });
 
   const itemPositions = rows.flatMap((row, index) =>
     row.kind === "item" ? [{ index, id: row.id }] : [],
@@ -148,14 +167,7 @@ function insertOptimisticAvailableId(
 
   if (itemPositions.length === 0) {
     if (initialized && rows.length === 0) {
-      rows.push({
-        kind: "item",
-        key: `optimistic-item:${id}`,
-        id,
-        pageKey: null,
-        optimistic: true,
-      });
-
+      rows.push(createRow());
       return true;
     }
 
@@ -178,13 +190,7 @@ function insertOptimisticAvailableId(
         return false;
       }
 
-      rows.splice(nextItemPosition.index, 0, {
-        kind: "item",
-        key: `optimistic-item:${id}`,
-        id,
-        pageKey: null,
-        optimistic: true,
-      });
+      rows.splice(nextItemPosition.index, 0, createRow());
 
       return true;
     }
@@ -197,13 +203,7 @@ function insertOptimisticAvailableId(
       return false;
     }
 
-    rows.splice(nextItemPosition.index, 0, {
-      kind: "item",
-      key: `optimistic-item:${id}`,
-      id,
-      pageKey: null,
-      optimistic: true,
-    });
+    rows.splice(nextItemPosition.index, 0, createRow());
 
     return true;
   }
@@ -222,22 +222,18 @@ function insertOptimisticAvailableId(
     return false;
   }
 
-  rows.splice(endIndex, 0, {
-    kind: "item",
-    key: `optimistic-item:${id}`,
-    id,
-    pageKey: null,
-    optimistic: true,
-  });
+  rows.splice(endIndex, 0, createRow());
 
   return true;
 }
 
 export function AvailableItemsResults({
   search,
-  revision,
+  selectionRevision,
+  additionRevision,
   selectionActionsDisabled,
   optimisticSelection,
+  pendingAdditions,
   onReconciled,
   onSelect,
 }: AvailableItemsResultsProps) {
@@ -256,12 +252,12 @@ export function AvailableItemsResults({
   const disabled = loading !== null || error !== null;
   const count = pages.reduce((total, page) => total + page.data.ids.length, 0);
 
-  const { rows, detachedPendingIds } = useMemo<{
+  const { rows, detachedPendingRows } = useMemo<{
     rows: VirtualRow[];
-    detachedPendingIds: number[];
+    detachedPendingRows: DetachedPendingRow[];
   }>(() => {
     const result: VirtualRow[] = [];
-    const detached: number[] = [];
+    const detached: DetachedPendingRow[] = [];
 
     for (const [pageIndex, page] of pages.entries()) {
       const previous = pages[pageIndex - 1];
@@ -300,6 +296,7 @@ export function AvailableItemsResults({
           id,
           pageKey: page.key,
           optimistic: operation?.action === "unselect",
+          pendingAddition: pendingAdditions.has(id),
         });
       }
     }
@@ -330,15 +327,48 @@ export function AvailableItemsResults({
         continue;
       }
 
-      const inserted = insertOptimisticAvailableId(result, id, initialized);
+      const inserted = insertPresentationAvailableId(
+        result,
+        id,
+        initialized,
+        "selection",
+      );
 
       if (!inserted) {
-        detached.push(id);
+        detached.push({ id, source: "selection" });
       }
     }
 
-    return { rows: result, detachedPendingIds: detached };
-  }, [pages, optimisticSelection, search, initialized]);
+    for (const id of pendingAdditions.keys()) {
+      if (!matchesSearch(id, search)) {
+        continue;
+      }
+
+      const alreadyRepresented = result.some(
+        (row) => row.kind === "item" && row.id === id,
+      );
+
+      if (alreadyRepresented) {
+        continue;
+      }
+
+      const inserted = insertPresentationAvailableId(
+        result,
+        id,
+        initialized,
+        "addition",
+      );
+
+      if (!inserted) {
+        detached.push({
+          id,
+          source: "addition",
+        });
+      }
+    }
+
+    return { rows: result, detachedPendingRows: detached };
+  }, [pages, optimisticSelection, pendingAdditions, search, initialized]);
 
   const getItemKey = useCallback(
     (index: number) => rows[index]?.key ?? index,
@@ -418,9 +448,9 @@ export function AvailableItemsResults({
 
   useEffect(() => {
     if (initialized) {
-      onReconciled(revision);
+      onReconciled(selectionRevision, additionRevision);
     }
-  }, [initialized, revision, onReconciled]);
+  }, [initialized, selectionRevision, additionRevision, onReconciled]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -487,7 +517,7 @@ export function AvailableItemsResults({
         )}
       </Box>
 
-      {detachedPendingIds.length > 0 && (
+      {detachedPendingRows.length > 0 && (
         <Box
           role="list"
           aria-label="Изменения, ожидающие сохранения"
@@ -500,31 +530,35 @@ export function AvailableItemsResults({
             overflow: "hidden",
           }}
         >
-          {detachedPendingIds.map((id) => (
-            <ListItem
-              key={`detached-pending:${id}`}
-              component="div"
-              role="listitem"
-              data-pending-item-id={id}
-              secondaryAction={
-                <Button
-                  size="small"
-                  disabled={selectionActionsDisabled}
-                  onClick={() => {
-                    onSelect(id);
-                  }}
-                >
-                  Выбрать
-                </Button>
-              }
-              sx={{
-                minHeight: ROW_HEIGHT,
-                boxSizing: "border-box",
-              }}
-            >
-              <ListItemText primary={`ID: ${id}`} secondary="Сохранение…" />
-            </ListItem>
-          ))}
+          {detachedPendingRows.map(({ id, source }) => {
+            const pendingAddition = source === "addition";
+
+            return (
+              <ListItem
+                key={`detached-pending:${source}:${id}`}
+                component="div"
+                role="listitem"
+                data-pending-item-id={id}
+                secondaryAction={
+                  <Button
+                    size="small"
+                    disabled={selectionActionsDisabled || pendingAddition}
+                    onClick={() => {
+                      onSelect(id);
+                    }}
+                  >
+                    Выбрать
+                  </Button>
+                }
+                sx={{
+                  minHeight: ROW_HEIGHT,
+                  boxSizing: "border-box",
+                }}
+              >
+                <ListItemText primary={`ID: ${id}`} secondary="Сохранение…" />
+              </ListItem>
+            );
+          })}
         </Box>
       )}
 
@@ -544,7 +578,9 @@ export function AvailableItemsResults({
           px: 2,
         }}
       >
-        {initialized && rows.length === 0 && detachedPendingIds.length === 0 ? (
+        {initialized &&
+        rows.length === 0 &&
+        detachedPendingRows.length === 0 ? (
           <Typography color="text.secondary" sx={{ py: 2 }}>
             Нет доступных элементов.
           </Typography>
@@ -589,7 +625,9 @@ export function AvailableItemsResults({
                       secondaryAction={
                         <Button
                           size="small"
-                          disabled={selectionActionsDisabled}
+                          disabled={
+                            selectionActionsDisabled || row.pendingAddition
+                          }
                           onClick={() => {
                             void onSelect(row.id);
                           }}
@@ -604,7 +642,11 @@ export function AvailableItemsResults({
                     >
                       <ListItemText
                         primary={`ID: ${row.id}`}
-                        secondary={row.optimistic ? "Сохранение…" : undefined}
+                        secondary={
+                          row.optimistic || row.pendingAddition
+                            ? "Сохранение…"
+                            : undefined
+                        }
                       />
                     </ListItem>
                   )}

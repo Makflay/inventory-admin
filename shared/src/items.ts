@@ -79,3 +79,33 @@ export type SelectionBatchResult =
 export type SelectionBatchResponse = {
   results: SelectionBatchResult[];
 };
+
+export type AddItemsBatchRequest = {
+  ids: number[];
+};
+
+export type AddItemAddedResult = {
+  id: number;
+  status: "added";
+};
+
+export type AddItemAlreadyExistsResult = {
+  id: number;
+  status: "already_exists";
+};
+
+export type AddItemRejectedResult = {
+  id: number;
+  status: "rejected";
+  error: string;
+  message: string;
+};
+
+export type AddItemBatchResult =
+  | AddItemAddedResult
+  | AddItemAlreadyExistsResult
+  | AddItemRejectedResult;
+
+export type AddItemsBatchResponse = {
+  results: AddItemBatchResult[];
+};

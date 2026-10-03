@@ -32,10 +32,14 @@ class ItemStore {
     return (id >= BASE_ID_MIN && id <= BASE_ID_MAX) || this.customIds.has(id);
   }
 
-  addMany(ids: Iterable<number>): void {
-    for (const id of ids) {
-      this.customIds.add(id);
+  add(id: number): "added" | "already_exists" {
+    if (this.exists(id)) {
+      return "already_exists";
     }
+
+    this.customIds.add(id);
+
+    return "added";
   }
 
   setSelection(id: number, selected: boolean): SetSelectionResult {
