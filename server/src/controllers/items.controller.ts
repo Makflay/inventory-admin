@@ -6,12 +6,16 @@ import type {
   SelectionBatchResult,
   AddItemBatchResult,
   AddItemsBatchResponse,
+  ReadBatchResponse,
+  ReadBatchResult,
 } from "@inventory/shared";
 
 import { itemStore } from "../services/item-store.js";
+import { parseReadPageRequest } from "../services/read-request-parser.js";
 
 const CURSOR_PATTERN = /^[1-9]\d{0,15}$/;
 const SEARCH_PATTERN = /^[1-9]\d*$/;
+const READ_REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 type ValidatedSelectionBatchOperation = {
   id: number;
@@ -128,56 +132,6 @@ export function updateSelectionBatch(req: Request, res: Response): void {
   res.json(response);
 }
 
-function parseCursor(
-  value: unknown,
-  parameter: "after" | "before",
-  res: Response,
-): string | null {
-  if (typeof value !== "string" || !CURSOR_PATTERN.test(value)) {
-    res.status(400).json({
-      error: "INVALID_CURSOR",
-      message:
-        "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
-      parameter,
-    });
-
-    return null;
-  }
-
-  const cursor = Number(value);
-
-  if (!Number.isSafeInteger(cursor)) {
-    res.status(400).json({
-      error: "INVALID_CURSOR",
-      message:
-        "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
-      parameter,
-    });
-
-    return null;
-  }
-
-  return value;
-}
-
-function parseSearch(value: unknown, res: Response): string | null {
-  if (value === undefined || value === "") {
-    return "";
-  }
-
-  if (typeof value !== "string" || !SEARCH_PATTERN.test(value)) {
-    res.status(400).json({
-      error: "INVALID_SEARCH",
-      message:
-        "Введите последовательность цифр без ведущих нулей или очистите поле поиска.",
-    });
-
-    return null;
-  }
-
-  return value;
-}
-
 export function addItems(req: Request, res: Response): void {
   if (!req.is("application/json")) {
     res.status(415).json({
@@ -186,8 +140,6 @@ export function addItems(req: Request, res: Response): void {
     });
     return;
   }
-
-  //const body: unknown = req.body;
 
   if (
     !isObject(req.body) ||
@@ -258,145 +210,162 @@ export function addItems(req: Request, res: Response): void {
   res.json(response);
 }
 
+export function readItemsBatch(req: Request, res: Response): void {
+  if (!req.is("application/json")) {
+    res.status(415).json({
+      error: "UNSUPPORTED_MEDIA_TYPE",
+      message: "Не удалось обработать запрос списка. Попробуйте снова.",
+    });
+
+    return;
+  }
+
+  if (
+    !isObject(req.body) ||
+    !("operations" in req.body) ||
+    !Array.isArray(req.body.operations) ||
+    req.body.operations.length === 0
+  ) {
+    res.status(400).json({
+      error: "INVALID_READ_BATCH",
+      message: "Не удалось обработать запрос списка. Попробуйте снова.",
+    });
+
+    return;
+  }
+
+  const rawOperations: unknown[] = req.body.operations;
+  const requestIds = new Set<string>();
+
+  for (const operation of rawOperations) {
+    if (
+      !isObject(operation) ||
+      typeof operation.requestId !== "string" ||
+      !READ_REQUEST_ID_PATTERN.test(operation.requestId) ||
+      requestIds.has(operation.requestId)
+    ) {
+      res.status(400).json({
+        error: "INVALID_READ_BATCH_IDENTITY",
+        message: "Не удалось сопоставить запросы списка. Попробуйте снова.",
+      });
+
+      return;
+    }
+
+    requestIds.add(operation.requestId);
+  }
+
+  const results: ReadBatchResult[] = rawOperations.map((rawOperation) => {
+    const operation = rawOperation as Record<string, unknown>;
+    const requestId = operation.requestId as string;
+
+    if (operation.type !== "available" && operation.type !== "selected") {
+      return {
+        requestId,
+        success: false,
+        error: "UNSUPPORTED_READ_TYPE",
+        message:
+          "Не удалось определить запрашиваемый список. Попробуйте снова.",
+      };
+    }
+
+    const parsed = parseReadPageRequest(operation.request);
+
+    if (!parsed.success) {
+      return {
+        requestId,
+        success: false,
+        error: parsed.failure.error,
+        message: parsed.failure.message,
+      };
+    }
+
+    if (operation.type === "available") {
+      return {
+        requestId,
+        type: "available",
+        success: true,
+        page: itemStore.getAvailablePage(parsed.request),
+      };
+    }
+
+    const selectedRequest: SelectedItemsPageRequest = parsed.request;
+
+    const page = itemStore.getSelectedPage(selectedRequest);
+
+    if (page === null) {
+      return {
+        requestId,
+        success: false,
+        error: "INVALID_CURSOR",
+        message:
+          "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
+      };
+    }
+
+    return {
+      requestId,
+      type: "selected",
+      success: true,
+      page,
+    };
+  });
+
+  const response: ReadBatchResponse = {
+    results,
+  };
+
+  res.setHeader("Cache-Control", "no-store");
+  res.json(response);
+}
+
 export function getAvailableItems(req: Request, res: Response): void {
-  const unsupportedParams = Object.keys(req.query).filter(
-    (key) => key !== "search" && key !== "after" && key !== "before",
-  );
+  const parsed = parseReadPageRequest(req.query);
 
-  if (unsupportedParams.length > 0) {
-    res.status(400).json({
-      error: "INVALID_QUERY",
-      message:
-        "Не удалось загрузить список. Обновите страницу и попробуйте снова.",
-      parameters: unsupportedParams,
-    });
+  if (!parsed.success) {
+    res.status(400).json(parsed.failure);
     return;
-  }
-
-  const rawAfter = req.query.after;
-  const rawBefore = req.query.before;
-
-  const search = parseSearch(req.query.search, res);
-
-  if (search === null) {
-    return;
-  }
-
-  if (rawAfter !== undefined && rawBefore !== undefined) {
-    res.status(400).json({
-      error: "INVALID_PAGINATION",
-      message:
-        "Не удалось определить нужную часть списка. Обновите страницу и попробуйте снова.",
-    });
-    return;
-  }
-
-  let pagination: AvailableItemsPageRequest;
-
-  if (rawAfter !== undefined) {
-    const after = parseCursor(rawAfter, "after", res);
-
-    if (after === null) {
-      return;
-    }
-
-    pagination = { search, after };
-  } else if (rawBefore !== undefined) {
-    const before = parseCursor(rawBefore, "before", res);
-
-    if (before === null) {
-      return;
-    }
-
-    pagination = { search, before };
-  } else {
-    pagination = { search };
   }
 
   res.setHeader("Cache-Control", "no-store");
-  res.json(itemStore.getAvailablePage(pagination));
+  res.json(itemStore.getAvailablePage(parsed.request));
 }
 
-function parseItemId(value: unknown, res: Response): number | null {
-  if (typeof value !== "string" || !CURSOR_PATTERN.test(value)) {
-    res.status(400).json({
-      error: "INVALID_ID",
-      message: "Не удалось определить выбранный элемент.",
-    });
+// function parseItemId(value: unknown, res: Response): number | null {
+//   if (typeof value !== "string" || !CURSOR_PATTERN.test(value)) {
+//     res.status(400).json({
+//       error: "INVALID_ID",
+//       message: "Не удалось определить выбранный элемент.",
+//     });
 
-    return null;
-  }
+//     return null;
+//   }
 
-  const id = Number(value);
+//   const id = Number(value);
 
-  if (!Number.isSafeInteger(id)) {
-    res.status(400).json({
-      error: "INVALID_ID",
-      message: "Не удалось определить выбранный элемент.",
-    });
+//   if (!Number.isSafeInteger(id)) {
+//     res.status(400).json({
+//       error: "INVALID_ID",
+//       message: "Не удалось определить выбранный элемент.",
+//     });
 
-    return null;
-  }
+//     return null;
+//   }
 
-  return id;
-}
+//   return id;
+// }
 
 export function getSelectedItems(req: Request, res: Response): void {
-  const unsupportedParams = Object.keys(req.query).filter(
-    (key) => key !== "search" && key !== "after" && key !== "before",
-  );
+  const parsed = parseReadPageRequest(req.query);
 
-  if (unsupportedParams.length > 0) {
-    res.status(400).json({
-      error: "INVALID_QUERY",
-      message:
-        "Не удалось загрузить выбранные элементы. Обновите страницу и попробуйте снова.",
-      parameters: unsupportedParams,
-    });
+  if (!parsed.success) {
+    res.status(400).json(parsed.failure);
     return;
   }
 
-  const search = parseSearch(req.query.search, res);
+  const selectedRequest: SelectedItemsPageRequest = parsed.request;
 
-  if (search === null) {
-    return;
-  }
-
-  const rawAfter = req.query.after;
-  const rawBefore = req.query.before;
-
-  if (rawAfter !== undefined && rawBefore !== undefined) {
-    res.status(400).json({
-      error: "INVALID_PAGINATION",
-      message:
-        "Не удалось определить нужную часть списка. Обновите страницу и попробуйте снова.",
-    });
-    return;
-  }
-
-  let pagination: SelectedItemsPageRequest;
-
-  if (rawAfter !== undefined) {
-    const after = parseCursor(rawAfter, "after", res);
-
-    if (after === null) {
-      return;
-    }
-
-    pagination = { search, after };
-  } else if (rawBefore !== undefined) {
-    const before = parseCursor(rawBefore, "before", res);
-
-    if (before === null) {
-      return;
-    }
-
-    pagination = { search, before };
-  } else {
-    pagination = { search };
-  }
-
-  const page = itemStore.getSelectedPage(pagination);
+  const page = itemStore.getSelectedPage(selectedRequest);
 
   if (page === null) {
     res.status(400).json({

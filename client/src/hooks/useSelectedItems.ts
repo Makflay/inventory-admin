@@ -3,9 +3,9 @@ import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import type { SelectedItemsPageRequest } from "@inventory/shared";
 
 import { ApiRequestError } from "../api/api-error";
-import { getSelectedItems } from "../api/selected-items.api";
 import { SelectedItemsCache } from "../services/selected-items-cache";
 import type { CachedSelectedPage } from "../services/selected-items-cache";
+import { readRequestManager } from "../services/read-request-manager";
 
 type LoadError = {
   request: SelectedItemsPageRequest;
@@ -25,6 +25,7 @@ function isAbortError(error: unknown): boolean {
 
 export function useSelectedItems(
   search: string,
+  freshnessToken: string,
   beforeChange: () => Set<string>,
 ) {
   const initialRequest = useMemo<SelectedItemsPageRequest>(
@@ -88,7 +89,11 @@ export function useSelectedItems(
       }));
 
       try {
-        const page = await getSelectedItems(controller.signal, request);
+        const page = await readRequestManager.readSelected(
+          controller.signal,
+          request,
+          freshnessToken,
+        );
 
         if (
           controller.signal.aborted ||
@@ -143,7 +148,7 @@ export function useSelectedItems(
         }
       }
     },
-    [cache, beforeChange],
+    [cache, beforeChange, freshnessToken],
   );
 
   useEffect(() => {

@@ -245,9 +245,10 @@ export function AvailableItemsResults({
 
   const captureViewportRef = useRef<() => Set<string>>(() => new Set<string>());
   const captureViewport = useCallback(() => captureViewportRef.current(), []);
+  const freshnessToken = `selection=${selectionRevision};addition=${additionRevision}`;
 
   const { pages, loading, error, initialized, loadPage, retry, touchPage } =
-    useAvailableItems(search, captureViewport);
+    useAvailableItems(search, freshnessToken, captureViewport);
 
   const disabled = loading !== null || error !== null;
   const count = pages.reduce((total, page) => total + page.data.ids.length, 0);

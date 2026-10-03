@@ -2,10 +2,10 @@ import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 
 import type { AvailableItemsPageRequest } from "@inventory/shared";
 
-import { getAvailableItems } from "../api/items.api";
 import { AvailableItemsCache } from "../services/available-items-cache";
 import type { CachedPage } from "../services/available-items-cache";
 import { ApiRequestError } from "../api/api-error";
+import { readRequestManager } from "../services/read-request-manager";
 
 type LoadError = {
   request: AvailableItemsPageRequest;
@@ -25,6 +25,7 @@ function isAbortError(error: unknown): boolean {
 
 export function useAvailableItems(
   search: string,
+  freshnessToken: string,
   beforeChange: () => Set<string>,
 ) {
   const initialRequest = useMemo<AvailableItemsPageRequest>(
@@ -88,7 +89,11 @@ export function useAvailableItems(
       }));
 
       try {
-        const page = await getAvailableItems(controller.signal, request);
+        const page = await readRequestManager.readAvailable(
+          controller.signal,
+          request,
+          freshnessToken,
+        );
 
         if (
           controller.signal.aborted ||
@@ -143,7 +148,7 @@ export function useAvailableItems(
         }
       }
     },
-    [cache, beforeChange],
+    [cache, freshnessToken, beforeChange],
   );
 
   useEffect(() => {

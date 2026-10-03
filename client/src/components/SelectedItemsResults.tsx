@@ -80,11 +80,10 @@ export function SelectedItemsResults({
   } | null>(null);
 
   const captureViewportRef = useRef<() => Set<string>>(() => new Set<string>());
-
   const captureViewport = useCallback(() => captureViewportRef.current(), []);
-
+  const freshnessToken = `selected=${revision}`;
   const { pages, loading, error, initialized, loadPage, retry, touchPage } =
-    useSelectedItems(search, captureViewport);
+    useSelectedItems(search, freshnessToken, captureViewport);
 
   const disabled = loading !== null || error !== null;
 
