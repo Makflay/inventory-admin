@@ -1,11 +1,15 @@
 import { useState, useEffect } from "react";
 import { Box, TextField } from "@mui/material";
 
+import type { OptimisticSelection } from "../types/selection";
+
 import { AvailableItemsResults } from "./AvailableItemsResults";
 
 type AvailableItemsListProps = {
   availableRevision: number;
   mutationPending: boolean;
+  optimisticSelection: OptimisticSelection;
+  onReconciled: (revision: number) => void;
   onSelect: (id: number) => Promise<void>;
 };
 
@@ -14,6 +18,8 @@ const SEARCH_DEBOUNCE_MS = 300;
 export function AvailableItemsList({
   availableRevision,
   mutationPending,
+  optimisticSelection,
+  onReconciled,
   onSelect,
 }: AvailableItemsListProps) {
   const [search, setSearch] = useState("");
@@ -56,7 +62,10 @@ export function AvailableItemsList({
       <AvailableItemsResults
         key={JSON.stringify([search, availableRevision])}
         search={search}
+        revision={availableRevision}
         mutationPending={mutationPending}
+        optimisticSelection={optimisticSelection}
+        onReconciled={onReconciled}
         onSelect={onSelect}
       />
     </>

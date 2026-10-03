@@ -17,6 +17,8 @@ import {
 } from "@mui/material";
 import { useVirtualizer } from "@tanstack/react-virtual";
 
+import type { OptimisticSelection } from "../types/selection";
+
 import { useSelectedItems } from "../hooks/useSelectedItems";
 import { areSelectedPagesAdjacent } from "../services/selected-items-cache";
 
@@ -29,7 +31,8 @@ type ItemRow = {
   kind: "item";
   key: string;
   id: number;
-  pageKey: string;
+  pageKey: string | null;
+  optimistic: boolean;
 };
 
 type BoundaryRow = {
@@ -48,15 +51,25 @@ type VirtualRow = ItemRow | BoundaryRow | EndRow;
 
 type SelectedItemsResultsProps = {
   search: string;
+  revision: number;
   mutationPending: boolean;
+  optimisticSelection: OptimisticSelection;
   onInitialLoadSettled: () => void;
+  onReconciled: (revision: number) => void;
   onUnselect: (id: number) => Promise<void>;
 };
 
+function matchesSearch(id: number, search: string): boolean {
+  return search === "" || String(id).includes(search);
+}
+
 export function SelectedItemsResults({
   search,
+  revision,
   mutationPending,
+  optimisticSelection,
   onInitialLoadSettled,
+  onReconciled,
   onUnselect,
 }: SelectedItemsResultsProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -81,8 +94,18 @@ export function SelectedItemsResults({
     }
   }, [initialized, error, onInitialLoadSettled]);
 
-  const rows = useMemo<VirtualRow[]>(() => {
+  useEffect(() => {
+    if (initialized) {
+      onReconciled(revision);
+    }
+  }, [initialized, revision, onReconciled]);
+
+  const { rows, detachedPendingIds } = useMemo<{
+    rows: VirtualRow[];
+    detachedPendingIds: number[];
+  }>(() => {
     const result: VirtualRow[] = [];
+    const detached: number[] = [];
 
     for (const [pageIndex, page] of pages.entries()) {
       const previous = pages[pageIndex - 1];
@@ -111,11 +134,18 @@ export function SelectedItemsResults({
       }
 
       for (const id of page.data.ids) {
+        const operation = optimisticSelection.get(id);
+
+        if (operation?.action === "unselect") {
+          continue;
+        }
+
         result.push({
           kind: "item",
           key: `item:${id}`,
           id,
           pageKey: page.key,
+          optimistic: operation?.action === "select",
         });
       }
     }
@@ -141,8 +171,53 @@ export function SelectedItemsResults({
       }
     }
 
-    return result;
-  }, [pages]);
+    for (const [id, operation] of optimisticSelection) {
+      if (operation.action !== "select" || !matchesSearch(id, search)) {
+        continue;
+      }
+
+      const alreadyConfirmed = result.some(
+        (row) => row.kind === "item" && row.id === id,
+      );
+
+      if (alreadyConfirmed) {
+        continue;
+      }
+
+      const endIndex = result.findIndex((row) => row.kind === "end");
+
+      const confirmedFilteredListIsEmpty =
+        initialized && pages.length === 0 && result.length === 0;
+
+      if (endIndex >= 0) {
+        result.splice(endIndex, 0, {
+          kind: "item",
+          key: `optimistic-item:${id}`,
+          id,
+          pageKey: null,
+          optimistic: true,
+        });
+
+        continue;
+      }
+
+      if (confirmedFilteredListIsEmpty) {
+        result.push({
+          kind: "item",
+          key: `optimistic-item:${id}`,
+          id,
+          pageKey: null,
+          optimistic: true,
+        });
+
+        continue;
+      }
+
+      detached.push(id);
+    }
+
+    return { rows: result, detachedPendingIds: detached };
+  }, [pages, optimisticSelection, search, initialized]);
 
   const getItemKey = useCallback(
     (index: number) => rows[index]?.key ?? index,
@@ -186,7 +261,9 @@ export function SelectedItemsResults({
         continue;
       }
 
-      visibleKeys.add(row.pageKey);
+      if (row.pageKey !== null) {
+        visibleKeys.add(row.pageKey);
+      }
 
       if (anchorRef.current === null) {
         anchorRef.current = {
@@ -242,7 +319,7 @@ export function SelectedItemsResults({
 
       const row = rows[virtualItem.index];
 
-      if (row?.kind === "item") {
+      if (row?.kind === "item" && row.pageKey !== null) {
         visiblePageKeys.add(row.pageKey);
       }
     }
@@ -284,6 +361,41 @@ export function SelectedItemsResults({
         )}
       </Box>
 
+      {detachedPendingIds.length > 0 && (
+        <Box
+          role="list"
+          aria-label="Изменения, ожидающие сохранения"
+          sx={{
+            mx: 2,
+            mb: 1,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1,
+            overflow: "hidden",
+          }}
+        >
+          {detachedPendingIds.map((id) => (
+            <ListItem
+              key={`detached-pending:${id}`}
+              component="div"
+              role="listitem"
+              data-pending-item-id={id}
+              secondaryAction={
+                <Button size="small" disabled>
+                  Убрать
+                </Button>
+              }
+              sx={{
+                minHeight: ROW_HEIGHT,
+                boxSizing: "border-box",
+              }}
+            >
+              <ListItemText primary={`ID: ${id}`} secondary="Сохранение…" />
+            </ListItem>
+          ))}
+        </Box>
+      )}
+
       <Box
         ref={rootRef}
         role="region"
@@ -300,7 +412,7 @@ export function SelectedItemsResults({
           px: 2,
         }}
       >
-        {initialized && pages.length === 0 ? (
+        {initialized && rows.length === 0 && detachedPendingIds.length === 0 ? (
           <Typography color="text.secondary" sx={{ py: 2 }}>
             Нет выбранных элементов.
           </Typography>
@@ -340,12 +452,12 @@ export function SelectedItemsResults({
                       component="div"
                       role="listitem"
                       data-selected-item-id={row.id}
-                      data-selected-page-key={row.pageKey}
+                      data-selected-page-key={row.pageKey ?? undefined}
                       divider
                       secondaryAction={
                         <Button
                           size="small"
-                          disabled={mutationPending}
+                          disabled={mutationPending || row.optimistic}
                           onClick={() => {
                             void onUnselect(row.id);
                           }}
@@ -358,7 +470,10 @@ export function SelectedItemsResults({
                         boxSizing: "border-box",
                       }}
                     >
-                      <ListItemText primary={`ID: ${row.id}`} />
+                      <ListItemText
+                        primary={`ID: ${row.id}`}
+                        secondary={row.optimistic ? "Сохранение…" : undefined}
+                      />
                     </ListItem>
                   )}
 

@@ -1,10 +1,7 @@
 import { useState, useEffect } from "react";
 import { Box, TextField } from "@mui/material";
 
-//import { useSelectedItems } from "../hooks/useSelectedItems";
-//import { areSelectedPagesAdjacent } from "../services/selected-items-cache";
-
-//import { SelectedItemsLoadBoundary } from "./SelectedItemsLoadBoundary";
+import type { OptimisticSelection } from "../types/selection";
 
 import { SelectedItemsResults } from "./SelectedItemsResults";
 
@@ -13,14 +10,18 @@ const SEARCH_DEBOUNCE_MS = 300;
 type SelectedItemsListProps = {
   selectedRevision: number;
   mutationPending: boolean;
+  optimisticSelection: OptimisticSelection;
   onInitialLoadSettled: () => void;
+  onReconciled: (revision: number) => void;
   onUnselect: (id: number) => Promise<void>;
 };
 
 export function SelectedItemsList({
   selectedRevision,
   mutationPending,
+  optimisticSelection,
   onInitialLoadSettled,
+  onReconciled,
   onUnselect,
 }: SelectedItemsListProps) {
   const [inputValue, setInputValue] = useState("");
@@ -63,8 +64,11 @@ export function SelectedItemsList({
       <SelectedItemsResults
         key={JSON.stringify([search, selectedRevision])}
         search={search}
+        revision={selectedRevision}
         mutationPending={mutationPending}
+        optimisticSelection={optimisticSelection}
         onInitialLoadSettled={onInitialLoadSettled}
+        onReconciled={onReconciled}
         onUnselect={onUnselect}
       />
     </>

@@ -19,6 +19,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 
 import type { AvailableItemsPageRequest } from "@inventory/shared";
+import type { OptimisticSelection } from "../types/selection";
 
 import { useAvailableItems } from "../hooks/useAvailableItems";
 import { areAdjacent } from "../services/available-items-cache";
@@ -39,7 +40,8 @@ type ItemRow = {
   kind: "item";
   key: string;
   id: number;
-  pageKey: string;
+  pageKey: string | null;
+  optimistic: boolean;
 };
 
 type BoundaryRow = {
@@ -120,13 +122,123 @@ function LoadBoundary({
 
 type AvailableItemsResultsProps = {
   search: string;
+  revision: number;
   mutationPending: boolean;
+  optimisticSelection: OptimisticSelection;
+  onReconciled: (revision: number) => void;
   onSelect: (id: number) => Promise<void>;
 };
 
+function matchesSearch(id: number, search: string): boolean {
+  return search === "" || String(id).includes(search);
+}
+
+function insertOptimisticAvailableId(
+  rows: VirtualRow[],
+  id: number,
+  initialized: boolean,
+): boolean {
+  if (rows.some((row) => row.kind === "item" && row.id === id)) {
+    return true;
+  }
+
+  const itemPositions = rows.flatMap((row, index) =>
+    row.kind === "item" ? [{ index, id: row.id }] : [],
+  );
+
+  if (itemPositions.length === 0) {
+    if (initialized && rows.length === 0) {
+      rows.push({
+        kind: "item",
+        key: `optimistic-item:${id}`,
+        id,
+        pageKey: null,
+        optimistic: true,
+      });
+
+      return true;
+    }
+
+    return false;
+  }
+
+  const nextItemPosition = itemPositions.find((position) => position.id > id);
+
+  if (nextItemPosition !== undefined) {
+    const previousItemPosition = [...itemPositions]
+      .reverse()
+      .find((position) => position.index < nextItemPosition.index);
+
+    if (previousItemPosition === undefined) {
+      const hasBoundaryBefore = rows
+        .slice(0, nextItemPosition.index)
+        .some((row) => row.kind === "boundary");
+
+      if (hasBoundaryBefore) {
+        return false;
+      }
+
+      rows.splice(nextItemPosition.index, 0, {
+        kind: "item",
+        key: `optimistic-item:${id}`,
+        id,
+        pageKey: null,
+        optimistic: true,
+      });
+
+      return true;
+    }
+
+    const hasBoundaryBetween = rows
+      .slice(previousItemPosition.index + 1, nextItemPosition.index)
+      .some((row) => row.kind === "boundary");
+
+    if (hasBoundaryBetween || previousItemPosition.id >= id) {
+      return false;
+    }
+
+    rows.splice(nextItemPosition.index, 0, {
+      kind: "item",
+      key: `optimistic-item:${id}`,
+      id,
+      pageKey: null,
+      optimistic: true,
+    });
+
+    return true;
+  }
+
+  const lastItemPosition = itemPositions[itemPositions.length - 1]!;
+
+  const endIndex = rows.findIndex(
+    (row, index) => index > lastItemPosition.index && row.kind === "end",
+  );
+
+  const hasBoundaryAfter = rows
+    .slice(lastItemPosition.index + 1)
+    .some((row) => row.kind === "boundary");
+
+  if (endIndex < 0 || hasBoundaryAfter || lastItemPosition.id >= id) {
+    return false;
+  }
+
+  rows.splice(endIndex, 0, {
+    kind: "item",
+    key: `optimistic-item:${id}`,
+    id,
+    pageKey: null,
+    optimistic: true,
+  });
+
+  return true;
+}
+
 export function AvailableItemsResults({
   search,
+  revision,
   mutationPending,
+  optimisticSelection,
+  onReconciled,
   onSelect,
 }: AvailableItemsResultsProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -144,8 +256,12 @@ export function AvailableItemsResults({
   const disabled = loading !== null || error !== null;
   const count = pages.reduce((total, page) => total + page.data.ids.length, 0);
 
-  const rows = useMemo<VirtualRow[]>(() => {
+  const { rows, detachedPendingIds } = useMemo<{
+    rows: VirtualRow[];
+    detachedPendingIds: number[];
+  }>(() => {
     const result: VirtualRow[] = [];
+    const detached: number[] = [];
 
     for (const [pageIndex, page] of pages.entries()) {
       const previous = pages[pageIndex - 1];
@@ -172,11 +288,18 @@ export function AvailableItemsResults({
       }
 
       for (const id of page.data.ids) {
+        const operation = optimisticSelection.get(id);
+
+        if (operation?.action === "select") {
+          continue;
+        }
+
         result.push({
           kind: "item",
           key: `item:${id}`,
           id,
           pageKey: page.key,
+          optimistic: operation?.action === "unselect",
         });
       }
     }
@@ -202,8 +325,20 @@ export function AvailableItemsResults({
       }
     }
 
-    return result;
-  }, [pages]);
+    for (const [id, operation] of optimisticSelection) {
+      if (operation.action !== "unselect" || !matchesSearch(id, search)) {
+        continue;
+      }
+
+      const inserted = insertOptimisticAvailableId(result, id, initialized);
+
+      if (!inserted) {
+        detached.push(id);
+      }
+    }
+
+    return { rows: result, detachedPendingIds: detached };
+  }, [pages, optimisticSelection, search, initialized]);
 
   const getItemKey = useCallback(
     (index: number) => rows[index]?.key ?? index,
@@ -247,7 +382,9 @@ export function AvailableItemsResults({
         continue;
       }
 
-      visibleKeys.add(row.pageKey);
+      if (row.pageKey !== null) {
+        visibleKeys.add(row.pageKey);
+      }
 
       if (anchorRef.current === null) {
         anchorRef.current = {
@@ -280,6 +417,12 @@ export function AvailableItemsResults({
   }, [rows, rowVirtualizer]);
 
   useEffect(() => {
+    if (initialized) {
+      onReconciled(revision);
+    }
+  }, [initialized, revision, onReconciled]);
+
+  useEffect(() => {
     const root = rootRef.current;
 
     if (root === null) {
@@ -300,7 +443,7 @@ export function AvailableItemsResults({
 
       const row = rows[virtualItem.index];
 
-      if (row?.kind === "item") {
+      if (row?.kind === "item" && row.pageKey !== null) {
         visiblePageKeys.add(row.pageKey);
       }
     }
@@ -344,6 +487,41 @@ export function AvailableItemsResults({
         )}
       </Box>
 
+      {detachedPendingIds.length > 0 && (
+        <Box
+          role="list"
+          aria-label="Изменения, ожидающие сохранения"
+          sx={{
+            mx: 2,
+            mb: 1,
+            border: 1,
+            borderColor: "divider",
+            borderRadius: 1,
+            overflow: "hidden",
+          }}
+        >
+          {detachedPendingIds.map((id) => (
+            <ListItem
+              key={`detached-pending:${id}`}
+              component="div"
+              role="listitem"
+              data-pending-item-id={id}
+              secondaryAction={
+                <Button size="small" disabled>
+                  Выбрать
+                </Button>
+              }
+              sx={{
+                minHeight: ROW_HEIGHT,
+                boxSizing: "border-box",
+              }}
+            >
+              <ListItemText primary={`ID: ${id}`} secondary="Сохранение…" />
+            </ListItem>
+          ))}
+        </Box>
+      )}
+
       <Box
         ref={rootRef}
         role="region"
@@ -360,7 +538,7 @@ export function AvailableItemsResults({
           px: 2,
         }}
       >
-        {initialized && pages.length === 0 ? (
+        {initialized && rows.length === 0 && detachedPendingIds.length === 0 ? (
           <Typography color="text.secondary" sx={{ py: 2 }}>
             Нет доступных элементов.
           </Typography>
@@ -400,12 +578,12 @@ export function AvailableItemsResults({
                       component="div"
                       role="listitem"
                       data-item-id={row.id}
-                      data-page-key={row.pageKey}
+                      data-page-key={row.pageKey ?? undefined}
                       divider
                       secondaryAction={
                         <Button
                           size="small"
-                          disabled={mutationPending}
+                          disabled={mutationPending || row.optimistic}
                           onClick={() => {
                             void onSelect(row.id);
                           }}
@@ -418,7 +596,10 @@ export function AvailableItemsResults({
                         boxSizing: "border-box",
                       }}
                     >
-                      <ListItemText primary={`ID: ${row.id}`} />
+                      <ListItemText
+                        primary={`ID: ${row.id}`}
+                        secondary={row.optimistic ? "Сохранение…" : undefined}
+                      />
                     </ListItem>
                   )}
 
