@@ -2,6 +2,8 @@ import type {
   SelectionBatchRequest,
   SelectionBatchResponse,
   SelectionBatchResult,
+  SelectionMutationOperation,
+  StaleServerVersionResponse,
 } from "@inventory/shared";
 
 import { ApiRequestError, readApiErrorResponse } from "./api-error";
@@ -16,33 +18,96 @@ export class SelectionBatchRejectedError extends ApiRequestError {
   }
 }
 
+export class StaleServerVersionError extends ApiRequestError {
+  readonly serverVersion: number;
+
+  constructor(response: StaleServerVersionResponse) {
+    super(response.error, response.message);
+    this.name = "StaleServerVersionError";
+    this.serverVersion = response.serverVersion;
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isStaleServerVersionResponse(
+  value: unknown,
+): value is StaleServerVersionResponse {
+  return (
+    isObject(value) &&
+    value.error === "STALE_SERVER_VERSION" &&
+    typeof value.message === "string" &&
+    value.message.trim().length > 0 &&
+    isValidServerVersion(value.serverVersion)
+  );
+}
+
+function resultMatchesOperation(
+  result: SelectionBatchResult,
+  operation: SelectionMutationOperation,
+): boolean {
+  if (result.kind !== operation.kind) {
+    return false;
+  }
+
+  if (operation.kind === "set_selection") {
+    return (
+      result.kind === "set_selection" &&
+      result.id === operation.id &&
+      result.selected === operation.selected
+    );
+  }
+
+  return (
+    result.kind === "reorder_selected" &&
+    result.draggedId === operation.draggedId &&
+    result.targetId === operation.targetId &&
+    result.placement === operation.placement &&
+    result.search === operation.search
+  );
+}
+
 function isSelectionBatchResult(value: unknown): value is SelectionBatchResult {
   if (
-    typeof value !== "object" ||
-    value === null ||
-    !("id" in value) ||
-    typeof value.id !== "number" ||
-    !Number.isSafeInteger(value.id) ||
-    value.id <= 0 ||
-    !("selected" in value) ||
-    typeof value.selected !== "boolean" ||
-    !("success" in value) ||
+    !isObject(value) ||
+    (value.kind !== "set_selection" && value.kind !== "reorder_selected") ||
     typeof value.success !== "boolean"
   ) {
     return false;
   }
 
-  if (value.success) {
-    return true;
+  if (value.kind === "set_selection") {
+    if (
+      !Number.isSafeInteger(value.id) ||
+      (value.id as number) <= 0 ||
+      typeof value.selected !== "boolean"
+    ) {
+      return false;
+    }
+  } else if (
+    !Number.isSafeInteger(value.draggedId) ||
+    (value.draggedId as number) <= 0 ||
+    !Number.isSafeInteger(value.targetId) ||
+    (value.targetId as number) <= 0 ||
+    (value.placement !== "before" && value.placement !== "after") ||
+    typeof value.search !== "string"
+  ) {
+    return false;
+  }
+
+  if (!value.success) {
+    return (
+      typeof value.error === "string" &&
+      value.error.trim().length > 0 &&
+      typeof value.message === "string" &&
+      value.message.trim().length > 0
+    );
   }
 
   return (
-    "error" in value &&
-    typeof value.error === "string" &&
-    value.error.trim().length > 0 &&
-    "message" in value &&
-    typeof value.message === "string" &&
-    value.message.trim().length > 0
+    value.kind !== "reorder_selected" || typeof value.changed === "boolean"
   );
 }
 
@@ -68,8 +133,7 @@ function isSelectionBatchResponse(
     return (
       operation !== undefined &&
       isSelectionBatchResult(result) &&
-      result.id === operation.id &&
-      result.selected === operation.selected
+      resultMatchesOperation(result, operation)
     );
   });
 }
@@ -92,6 +156,19 @@ export async function updateSelectionBatch(
     throw new ApiRequestError(
       "NETWORK_ERROR",
       "Не удалось связаться с сервером. Проверьте подключение и попробуйте снова.",
+    );
+  }
+
+  if (response.status === 409) {
+    const data = await parseJson(response);
+
+    if (isStaleServerVersionResponse(data)) {
+      throw new StaleServerVersionError(data);
+    }
+
+    throw new ApiRequestError(
+      "INVALID_RESPONSE",
+      "Сервер вернул некорректные данные. Обновите страницу и попробуйте снова.",
     );
   }
 

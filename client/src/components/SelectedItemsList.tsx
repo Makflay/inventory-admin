@@ -1,7 +1,11 @@
 import { useState, useEffect } from "react";
 import { Box, TextField } from "@mui/material";
 
-import type { OptimisticSelection } from "../types/selection";
+import type {
+  OptimisticSelection,
+  OptimisticReorderOperation,
+  QueueReorderInput,
+} from "../types/selection";
 
 import { SelectedItemsResults } from "./SelectedItemsResults";
 
@@ -11,18 +15,22 @@ type SelectedItemsListProps = {
   selectedRevision: number;
   selectionActionsDisabled: boolean;
   optimisticSelection: OptimisticSelection;
+  optimisticReorders: readonly OptimisticReorderOperation[];
   onInitialLoadSettled: () => void;
   onReconciled: (revision: number) => void;
   onUnselect: (id: number) => void;
+  onReorder: (input: QueueReorderInput) => boolean;
 };
 
 export function SelectedItemsList({
   selectedRevision,
   selectionActionsDisabled,
   optimisticSelection,
+  optimisticReorders,
   onInitialLoadSettled,
   onReconciled,
   onUnselect,
+  onReorder,
 }: SelectedItemsListProps) {
   const [inputValue, setInputValue] = useState("");
   const [search, setSearch] = useState("");
@@ -67,9 +75,11 @@ export function SelectedItemsList({
         revision={selectedRevision}
         selectionActionsDisabled={selectionActionsDisabled}
         optimisticSelection={optimisticSelection}
+        optimisticReorders={optimisticReorders}
         onInitialLoadSettled={onInitialLoadSettled}
         onReconciled={onReconciled}
         onUnselect={onUnselect}
+        onReorder={onReorder}
       />
     </>
   );

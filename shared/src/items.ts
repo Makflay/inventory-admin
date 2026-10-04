@@ -59,32 +59,85 @@ export type SelectedItemsReadResponse = {
   serverVersion: number;
 };
 
-export type SelectionBatchOperation = {
+// export type SelectionBatchOperation = {
+//   id: number;
+//   selected: boolean;
+// };
+
+export type SetSelectionOperation = {
+  kind: "set_selection";
   id: number;
   selected: boolean;
 };
+
+export type ReorderSelectedOperation = {
+  kind: "reorder_selected";
+  draggedId: number;
+  targetId: number;
+  placement: "before" | "after";
+  search: string;
+};
+
+export type SelectionMutationOperation =
+  | SetSelectionOperation
+  | ReorderSelectedOperation;
 
 export type SelectionBatchRequest = {
-  operations: SelectionBatchOperation[];
+  operations: SelectionMutationOperation[];
+  baseServerVersion?: number;
 };
 
-export type SelectionBatchSuccess = {
-  id: number;
-  selected: boolean;
+export type SetSelectionSuccess = SetSelectionOperation & {
   success: true;
 };
 
-export type SelectionBatchFailure = {
-  id: number;
-  selected: boolean;
+export type SetSelectionFailure = SetSelectionOperation & {
   success: false;
   error: string;
   message: string;
 };
 
+export type ReorderSelectedSuccess = ReorderSelectedOperation & {
+  success: true;
+  changed: boolean;
+};
+
+export type ReorderSelectedFailure = ReorderSelectedOperation & {
+  success: false;
+  error:
+    | "DRAGGED_NOT_SELECTED"
+    | "TARGET_NOT_SELECTED"
+    | "DRAGGED_NOT_MATCHING_SEARCH"
+    | "TARGET_NOT_MATCHING_SEARCH"
+    | "SAME_REORDER_ITEM";
+  message: string;
+};
+
+// export type SelectionBatchSuccess = {
+//   id: number;
+//   selected: boolean;
+//   success: true;
+// };
+
+// export type SelectionBatchFailure = {
+//   id: number;
+//   selected: boolean;
+//   success: false;
+//   error: string;
+//   message: string;
+// };
+
+export type StaleServerVersionResponse = {
+  error: "STALE_SERVER_VERSION";
+  message: string;
+  serverVersion: number;
+};
+
 export type SelectionBatchResult =
-  | SelectionBatchSuccess
-  | SelectionBatchFailure;
+  | SetSelectionSuccess
+  | SetSelectionFailure
+  | ReorderSelectedSuccess
+  | ReorderSelectedFailure;
 
 export type SelectionBatchResponse = {
   results: SelectionBatchResult[];

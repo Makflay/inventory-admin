@@ -27,6 +27,8 @@ export function InventoryPage() {
     retry: retrySelectionBatch,
     confirmAvailableRevision: confirmSelectionAvailableRevision,
     confirmSelectedRevision,
+    optimisticReorders,
+    queueReorder,
   } = useSelectionMutationQueue();
   const {
     pendingAdditions,
@@ -41,6 +43,17 @@ export function InventoryPage() {
   const handleSelectedInitialLoadSettled = useCallback(() => {
     setSelectedLoading(false);
   }, []);
+
+  const handleReorder = useCallback(
+    (input: {
+      draggedId: number;
+      targetId: number;
+      placement: "before" | "after";
+      search: string;
+      baseServerVersion: number;
+    }) => queueReorder(input),
+    [queueReorder],
+  );
 
   const handleSelect = useCallback(
     (id: number) => {
@@ -182,6 +195,8 @@ export function InventoryPage() {
             onInitialLoadSettled={handleSelectedInitialLoadSettled}
             onReconciled={confirmSelectedRevision}
             onUnselect={handleUnselect}
+            optimisticReorders={optimisticReorders}
+            onReorder={handleReorder}
           />
         </Paper>
       </Stack>

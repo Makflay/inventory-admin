@@ -25,6 +25,7 @@ type SelectedItemsState = {
   loading: SelectedItemsPageRequest | null;
   error: LoadError | null;
   initialized: boolean;
+  datasetVersion: number | null;
 };
 
 function isAbortError(error: unknown): boolean {
@@ -46,6 +47,7 @@ export function useSelectedItems(
     loading: initialRequest,
     error: null,
     initialized: false,
+    datasetVersion: null,
   });
   const cacheVersionRef = useRef<number | null>(null);
 
@@ -81,6 +83,7 @@ export function useSelectedItems(
           loading: null,
           error: null,
           initialized: false,
+          datasetVersion: null,
         });
       }
 
@@ -179,6 +182,7 @@ export function useSelectedItems(
               loading: initialRequest,
               error: null,
               initialized: false,
+              datasetVersion: null,
             });
 
             return;
@@ -202,6 +206,7 @@ export function useSelectedItems(
           loading: null,
           error: null,
           initialized: true,
+          datasetVersion: cacheVersionRef.current,
         });
       } catch (error) {
         if (
@@ -276,6 +281,7 @@ export function useSelectedItems(
         loading: initialRequest,
         error: null,
         initialized: false,
+        datasetVersion: null,
       });
 
       queueMicrotask(() => {

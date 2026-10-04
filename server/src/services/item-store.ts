@@ -21,6 +21,15 @@ function matchesSearch(id: number, search: string): boolean {
 
 export type SetSelectionResult = "updated" | "unchanged" | "not_found";
 
+export type ReorderSelectedResult =
+  | "updated"
+  | "unchanged"
+  | "dragged_not_selected"
+  | "target_not_selected"
+  | "dragged_not_matching_search"
+  | "target_not_matching_search"
+  | "same_item";
+
 class ItemStore {
   private serverVersion = 0;
   private readonly customIds = new Set<number>();
@@ -83,6 +92,78 @@ class ItemStore {
 
     if (index >= 0) {
       this.selectedOrder.splice(index, 1);
+    }
+
+    this.incrementServerVersion();
+
+    return "updated";
+  }
+
+  reorderSelected(
+    draggedId: number,
+    targetId: number,
+    placement: "before" | "after",
+    search: string,
+  ): ReorderSelectedResult {
+    if (draggedId === targetId) {
+      return "same_item";
+    }
+
+    if (!this.selectedIds.has(draggedId)) {
+      return "dragged_not_selected";
+    }
+
+    if (!this.selectedIds.has(targetId)) {
+      return "target_not_selected";
+    }
+
+    if (!matchesSearch(draggedId, search)) {
+      return "dragged_not_matching_search";
+    }
+
+    if (!matchesSearch(targetId, search)) {
+      return "target_not_matching_search";
+    }
+
+    const matchingSlots: number[] = [];
+    const matchingIds: number[] = [];
+
+    for (const [index, id] of this.selectedOrder.entries()) {
+      if (matchesSearch(id, search)) {
+        matchingSlots.push(index);
+        matchingIds.push(id);
+      }
+    }
+
+    const draggedIndex = matchingIds.indexOf(draggedId);
+
+    if (draggedIndex < 0) {
+      return "dragged_not_matching_search";
+    }
+
+    matchingIds.splice(draggedIndex, 1);
+
+    const targetIndex = matchingIds.indexOf(targetId);
+
+    if (targetIndex < 0) {
+      return "target_not_matching_search";
+    }
+
+    const insertionIndex =
+      placement === "before" ? targetIndex : targetIndex + 1;
+
+    matchingIds.splice(insertionIndex, 0, draggedId);
+
+    const unchanged = matchingSlots.every(
+      (slot, index) => this.selectedOrder[slot] === matchingIds[index],
+    );
+
+    if (unchanged) {
+      return "unchanged";
+    }
+
+    for (const [index, slot] of matchingSlots.entries()) {
+      this.selectedOrder[slot] = matchingIds[index]!;
     }
 
     this.incrementServerVersion();

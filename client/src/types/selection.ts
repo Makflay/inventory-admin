@@ -1,3 +1,9 @@
+import type {
+  ReorderSelectedOperation,
+  //SelectionMutationOperation,
+  SetSelectionOperation,
+} from "@inventory/shared";
+
 export type SelectionAction = "select" | "unselect";
 
 export type OptimisticSelectionPhase =
@@ -16,26 +22,25 @@ export type OptimisticSelection = ReadonlyMap<
   OptimisticSelectionOperation
 >;
 
-export type QueuedSelectionOperation = {
-  id: number;
-  selected: boolean;
+export type QueuedSetSelectionOperation = SetSelectionOperation & {
   baseSelected: boolean;
-  generation: number;
-  sequence: number;
 };
 
-export type InFlightSelectionOperation = Readonly<{
-  id: number;
-  selected: boolean;
-  baseSelected: boolean;
-  generation: number;
-  sequence: number;
-}>;
+export type QueuedReorderOperation = ReorderSelectedOperation & {
+  baseServerVersion: number;
+};
+
+export type QueuedSelectionOperation =
+  | QueuedSetSelectionOperation
+  | QueuedReorderOperation;
+
+export type InFlightSelectionOperation = Readonly<QueuedSelectionOperation>;
 
 export type InFlightSelectionBatch = {
   batchId: number;
   operations: readonly InFlightSelectionOperation[];
   status: "requesting" | "transport-error";
+  baseServerVersion?: number;
 };
 
 export type SelectionReconciliation = {
@@ -51,3 +56,14 @@ export type SelectionQueueError = {
   message: string;
   retryable: boolean;
 };
+
+export type OptimisticReorderOperation = Readonly<{
+  draggedId: number;
+  targetId: number;
+  placement: "before" | "after";
+  search: string;
+  baseServerVersion: number;
+  phase: OptimisticSelectionPhase;
+}>;
+
+export type QueueReorderInput = Omit<QueuedReorderOperation, "kind">;

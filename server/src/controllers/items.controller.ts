@@ -8,55 +8,154 @@ import type {
   AddItemsBatchResponse,
   ReadBatchResponse,
   ReadBatchResult,
+  SetSelectionOperation,
+  ReorderSelectedOperation,
+  SelectionMutationOperation,
+  StaleServerVersionResponse,
 } from "@inventory/shared";
 
 import { itemStore } from "../services/item-store.js";
 import { parseReadPageRequest } from "../services/read-request-parser.js";
 
 //const CURSOR_PATTERN = /^[1-9]\d{0,15}$/;
-//const SEARCH_PATTERN = /^[1-9]\d*$/;
+const SEARCH_PATTERN = /^[1-9]\d*$/;
 const READ_REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
-type ValidatedSelectionBatchOperation = {
-  id: number;
-  selected: boolean;
+type ValidatedSelectionBatch = {
+  operations: SelectionMutationOperation[];
+  baseServerVersion?: number;
 };
+
+function isPositiveId(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function isServerVersion(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function parseSelectionOperation(
+  value: unknown,
+): SelectionMutationOperation | null {
+  if (!isObject(value) || typeof value.kind !== "string") {
+    return null;
+  }
+
+  if (value.kind === "set_selection") {
+    if (!isPositiveId(value.id) || typeof value.selected !== "boolean") {
+      return null;
+    }
+
+    const operation: SetSelectionOperation = {
+      kind: "set_selection",
+      id: value.id,
+      selected: value.selected,
+    };
+
+    return operation;
+  }
+
+  if (value.kind === "reorder_selected") {
+    if (
+      !isPositiveId(value.draggedId) ||
+      !isPositiveId(value.targetId) ||
+      (value.placement !== "before" && value.placement !== "after") ||
+      typeof value.search !== "string" ||
+      (value.search !== "" && !SEARCH_PATTERN.test(value.search))
+    ) {
+      return null;
+    }
+
+    const operation: ReorderSelectedOperation = {
+      kind: "reorder_selected",
+      draggedId: value.draggedId,
+      targetId: value.targetId,
+      placement: value.placement,
+      search: value.search,
+    };
+
+    return operation;
+  }
+
+  return null;
+}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function reorderFailure(
+  operation: ReorderSelectedOperation,
+  result: Exclude<
+    ReturnType<typeof itemStore.reorderSelected>,
+    "updated" | "unchanged"
+  >,
+): SelectionBatchResult {
+  const failures = {
+    dragged_not_selected: {
+      error: "DRAGGED_NOT_SELECTED",
+      message: "Перемещаемый элемент больше не выбран.",
+    },
+    target_not_selected: {
+      error: "TARGET_NOT_SELECTED",
+      message:
+        "Элемент, рядом с которым выполняется перемещение, больше не выбран.",
+    },
+    dragged_not_matching_search: {
+      error: "DRAGGED_NOT_MATCHING_SEARCH",
+      message: "Перемещаемый элемент больше не входит в текущий список.",
+    },
+    target_not_matching_search: {
+      error: "TARGET_NOT_MATCHING_SEARCH",
+      message:
+        "Элемент, рядом с которым выполняется перемещение, больше не входит в текущий список.",
+    },
+    same_item: {
+      error: "SAME_REORDER_ITEM",
+      message: "Элемент нельзя переместить относительно самого себя.",
+    },
+  } as const;
+
+  return {
+    ...operation,
+    success: false,
+    ...failures[result],
+  };
+}
+
 function parseSelectionBatch(
   body: unknown,
   res: Response,
-): ValidatedSelectionBatchOperation[] | null {
+): ValidatedSelectionBatch | null {
   if (
     !isObject(body) ||
-    !("operations" in body) ||
+    //!("operations" in body) ||
     !Array.isArray(body.operations) ||
     body.operations.length === 0
   ) {
     res.status(400).json({
       error: "INVALID_SELECTION_BATCH",
       message:
-        "Не удалось обработать изменения выбора. Проверьте данные и попробуйте снова.",
+        "Не удалось обработать изменения выбранных элементов. Проверьте данные и попробуйте снова.",
     });
 
     return null;
   }
 
-  const operations: ValidatedSelectionBatchOperation[] = [];
-  const seenIds = new Set<number>();
+  const operations: SelectionMutationOperation[] = [];
+  //const seenIds = new Set<number>();
 
   for (const value of body.operations) {
+    const operation = parseSelectionOperation(value);
     if (
-      !isObject(value) ||
-      !("id" in value) ||
-      typeof value.id !== "number" ||
-      !Number.isSafeInteger(value.id) ||
-      value.id <= 0 ||
-      !("selected" in value) ||
-      typeof value.selected !== "boolean"
+      // !isObject(value) ||
+      // !("id" in value) ||
+      // typeof value.id !== "number" ||
+      // !Number.isSafeInteger(value.id) ||
+      // value.id <= 0 ||
+      // !("selected" in value) ||
+      // typeof value.selected !== "boolean"
+      operation === null
     ) {
       res.status(400).json({
         error: "INVALID_SELECTION_OPERATION",
@@ -66,26 +165,56 @@ function parseSelectionBatch(
 
       return null;
     }
-
-    if (seenIds.has(value.id)) {
-      res.status(400).json({
-        error: "DUPLICATE_SELECTION_OPERATION",
-        message:
-          "Для одного элемента передано несколько изменений. Попробуйте снова.",
-      });
-
-      return null;
-    }
-
-    seenIds.add(value.id);
-
-    operations.push({
-      id: value.id,
-      selected: value.selected,
-    });
+    operations.push(operation);
   }
 
-  return operations;
+  // if (seenIds.has(value.id)) {
+  //   res.status(400).json({
+  //     error: "DUPLICATE_SELECTION_OPERATION",
+  //     message:
+  //       "Для одного элемента передано несколько изменений. Попробуйте снова.",
+  //   });
+
+  //   return null;
+  // }
+
+  const containsReorder = operations.some(
+    (operation) => operation.kind === "reorder_selected",
+  );
+
+  if (
+    containsReorder &&
+    (!("baseServerVersion" in body) || !isServerVersion(body.baseServerVersion))
+  ) {
+    res.status(400).json({
+      error: "INVALID_BASE_SERVER_VERSION",
+      message:
+        "Не удалось определить актуальность порядка элементов. Обновите список и попробуйте снова.",
+    });
+
+    return null;
+  }
+
+  if (
+    !containsReorder &&
+    "baseServerVersion" in body &&
+    body.baseServerVersion !== undefined
+  ) {
+    res.status(400).json({
+      error: "UNEXPECTED_BASE_SERVER_VERSION",
+      message:
+        "Не удалось обработать изменения выбранных элементов. Обновите список и попробуйте снова.",
+    });
+
+    return null;
+  }
+
+  return {
+    operations,
+    baseServerVersion: containsReorder
+      ? (body.baseServerVersion as number)
+      : undefined,
+  };
 }
 
 export function updateSelectionBatch(req: Request, res: Response): void {
@@ -98,31 +227,71 @@ export function updateSelectionBatch(req: Request, res: Response): void {
     return;
   }
 
-  const operations = parseSelectionBatch(req.body, res);
+  const batch = parseSelectionBatch(req.body, res);
 
-  if (operations === null) {
+  if (batch === null) {
     return;
   }
 
-  const results: SelectionBatchResult[] = operations.map(({ id, selected }) => {
-    const result = itemStore.setSelection(id, selected);
+  const containsReorder = batch.operations.some(
+    (operation) => operation.kind === "reorder_selected",
+  );
 
-    if (result === "not_found") {
-      return {
-        id,
-        selected,
-        success: false,
-        error: "ITEM_NOT_FOUND",
-        message: "Элемент не найден.",
-      };
-    }
-
-    return {
-      id,
-      selected,
-      success: true,
+  if (
+    containsReorder &&
+    batch.baseServerVersion !== itemStore.getServerVersion()
+  ) {
+    const response: StaleServerVersionResponse = {
+      error: "STALE_SERVER_VERSION",
+      message:
+        "Порядок выбранных элементов изменился. Дождитесь обновления списка и повторите действие.",
+      serverVersion: itemStore.getServerVersion(),
     };
-  });
+
+    res.setHeader("Cache-Control", "no-store");
+    res.status(409).json(response);
+    return;
+  }
+
+  const results: SelectionBatchResult[] = [];
+
+  for (const operation of batch.operations) {
+    if (operation.kind === "set_selection") {
+      const result = itemStore.setSelection(operation.id, operation.selected);
+
+      if (result === "not_found") {
+        results.push({
+          ...operation,
+          success: false,
+          error: "ITEM_NOT_FOUND",
+          message: "Элемент не найден.",
+        });
+      } else {
+        results.push({
+          ...operation,
+          success: true,
+        });
+      }
+
+      continue;
+    }
+    const result = itemStore.reorderSelected(
+      operation.draggedId,
+      operation.targetId,
+      operation.placement,
+      operation.search,
+    );
+
+    if (result === "updated" || result === "unchanged") {
+      results.push({
+        ...operation,
+        success: true,
+        changed: result === "updated",
+      });
+    } else {
+      results.push(reorderFailure(operation, result));
+    }
+  }
 
   const response: SelectionBatchResponse = {
     results,

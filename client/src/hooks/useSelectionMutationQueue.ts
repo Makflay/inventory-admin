@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { SelectionBatchResponse } from "@inventory/shared";
+import type {
+  SelectionBatchResponse,
+  SelectionBatchRequest,
+  SelectionMutationOperation,
+} from "@inventory/shared";
 import type {
   InFlightSelectionBatch,
   InFlightSelectionOperation,
@@ -9,83 +13,183 @@ import type {
   QueuedSelectionOperation,
   SelectionQueueError,
   SelectionReconciliation,
+  OptimisticReorderOperation,
+  OptimisticSelectionPhase,
+  QueueReorderInput,
 } from "../types/selection";
 
 import { ApiRequestError } from "../api/api-error";
 import {
   SelectionBatchRejectedError,
   updateSelectionBatch,
+  StaleServerVersionError,
 } from "../api/selected-items.api";
 import { observeServerVersion } from "../services/server-version";
 
 const FLUSH_INTERVAL_MS = 1000;
 
-function actionFromSelected(selected: boolean): "select" | "unselect" {
-  return selected ? "select" : "unselect";
-}
+// function actionFromSelected(selected: boolean): "select" | "unselect" {
+//   return selected ? "select" : "unselect";
+// }
 
-function rebaseQueuedOperation(
-  queued: Map<number, QueuedSelectionOperation>,
+// function rebaseQueuedOperation(
+//   queued: Map<number, QueuedSelectionOperation>,
+//   id: number,
+//   baseSelected: boolean,
+// ): void {
+//   const operation = queued.get(id);
+
+//   if (operation === undefined) {
+//     return;
+//   }
+
+//   if (operation.selected === baseSelected) {
+//     queued.delete(id);
+//     return;
+//   }
+
+//   queued.set(id, {
+//     ...operation,
+//     baseSelected,
+//   });
+// }
+
+function rebaseQueuedSetSelection(
+  queue: readonly QueuedSelectionOperation[],
   id: number,
   baseSelected: boolean,
-): void {
-  const operation = queued.get(id);
+): QueuedSelectionOperation[] {
+  const next = [...queue];
+  let lastBarrierIndex = -1;
 
-  if (operation === undefined) {
-    return;
+  for (let index = 0; index < next.length; index++) {
+    //const operation = next[index]!;
+
+    for (let index = next.length - 1; index >= 0; index--) {
+      if (reorderDependsOnId(next[index]!, id)) {
+        lastBarrierIndex = index;
+        break;
+      }
+    }
+
+    for (let index = lastBarrierIndex + 1; index < next.length; index++) {
+      const operation = next[index];
+
+      if (operation.kind !== "set_selection" || operation.id !== id) {
+        continue;
+      }
+
+      if (operation.selected === baseSelected) {
+        next.splice(index, 1);
+      } else {
+        next[index] = {
+          ...operation,
+          baseSelected,
+        };
+      }
+
+      break;
+    }
   }
 
-  if (operation.selected === baseSelected) {
-    queued.delete(id);
-    return;
-  }
-
-  queued.set(id, {
-    ...operation,
-    baseSelected,
-  });
+  return next;
 }
 
+// function applyOptimisticSelections(
+//   result: Map<number, OptimisticSelectionOperation>,
+//   operations: readonly InFlightSelectionOperation[],
+//   phase: OptimisticSelectionPhase,
+// ): void {
+//   for (const operation of operations) {
+//     if (operation.kind !== "set_selection") {
+//       continue;
+//     }
+
+//     result.set(operation.id, {
+//       action: operation.selected ? "select" : "unselect",
+//       phase,
+//     });
+//   }
+// }
+
 function buildOptimisticSelection(
-  queued: ReadonlyMap<number, QueuedSelectionOperation>,
+  queued: readonly QueuedSelectionOperation[],
   inFlight: InFlightSelectionBatch | null,
   reconciliation: SelectionReconciliation | null,
 ): OptimisticSelection {
   const result = new Map<number, OptimisticSelectionOperation>();
 
-  if (reconciliation !== null) {
-    for (const operation of reconciliation.operations) {
+  const apply = (
+    operations: readonly InFlightSelectionOperation[],
+    phase: OptimisticSelectionPhase,
+  ) => {
+    for (const operation of operations) {
+      if (operation.kind !== "set_selection") {
+        continue;
+      }
+
       result.set(operation.id, {
-        action: actionFromSelected(operation.selected),
-        phase: "reconciling",
+        action: operation.selected ? "select" : "unselect",
+        phase,
       });
     }
+  };
+
+  if (reconciliation !== null) {
+    apply(reconciliation.operations, "reconciling");
   }
 
   if (inFlight !== null) {
-    for (const operation of inFlight.operations) {
-      result.set(operation.id, {
-        action: actionFromSelected(operation.selected),
-        phase:
-          inFlight.status === "transport-error"
-            ? "transport-error"
-            : "in-flight",
+    apply(
+      inFlight.operations,
+      inFlight.status === "transport-error" ? "transport-error" : "in-flight",
+    );
+  }
+
+  apply(queued, "queued");
+
+  return result;
+}
+
+function buildOptimisticReorders(
+  queued: readonly QueuedSelectionOperation[],
+  inFlight: InFlightSelectionBatch | null,
+  reconciliation: SelectionReconciliation | null,
+): OptimisticReorderOperation[] {
+  const result: OptimisticReorderOperation[] = [];
+
+  const append = (
+    operations: readonly InFlightSelectionOperation[],
+    phase: OptimisticSelectionPhase,
+  ) => {
+    for (const operation of operations) {
+      if (operation.kind !== "reorder_selected") {
+        continue;
+      }
+
+      result.push({
+        draggedId: operation.draggedId,
+        targetId: operation.targetId,
+        placement: operation.placement,
+        search: operation.search,
+        baseServerVersion: operation.baseServerVersion,
+        phase,
       });
     }
+  };
+
+  if (reconciliation !== null) {
+    append(reconciliation.operations, "reconciling");
   }
 
-  const queuedOperations = [...queued.values()].sort(
-    (left, right) => left.sequence - right.sequence,
-  );
-
-  for (const operation of queuedOperations) {
-    result.delete(operation.id);
-
-    result.set(operation.id, {
-      action: actionFromSelected(operation.selected),
-      phase: "queued",
-    });
+  if (inFlight !== null) {
+    append(
+      inFlight.operations,
+      inFlight.status === "transport-error" ? "transport-error" : "in-flight",
+    );
   }
+
+  append(queued, "queued");
 
   return result;
 }
@@ -102,14 +206,87 @@ function failureMessage(response: SelectionBatchResponse): string | null {
   return messages.length > 0 ? messages.join(" ") : null;
 }
 
+function reorderDependsOnId(
+  operation: QueuedSelectionOperation,
+  id: number,
+): boolean {
+  return (
+    operation.kind === "reorder_selected" &&
+    (operation.draggedId === id || operation.targetId === id)
+  );
+}
+
+function toHttpOperation(
+  operation: InFlightSelectionOperation,
+): SelectionMutationOperation {
+  if (operation.kind === "set_selection") {
+    return {
+      kind: "set_selection",
+      id: operation.id,
+      selected: operation.selected,
+    };
+  }
+
+  return {
+    kind: "reorder_selected",
+    draggedId: operation.draggedId,
+    targetId: operation.targetId,
+    placement: operation.placement,
+    search: operation.search,
+  };
+}
+
+function snapshotHasSelection(
+  operations: readonly InFlightSelectionOperation[],
+): boolean {
+  return operations.some((operation) => operation.kind === "set_selection");
+}
+
+function snapshotHasReorder(
+  operations: readonly InFlightSelectionOperation[],
+): boolean {
+  return operations.some((operation) => operation.kind === "reorder_selected");
+}
+
+function takeSnapshotOperations(queue: readonly QueuedSelectionOperation[]): {
+  operations: InFlightSelectionOperation[];
+  remaining: QueuedSelectionOperation[];
+  baseServerVersion?: number;
+} {
+  let batchBaseVersion: number | undefined;
+  let endIndex = queue.length;
+
+  for (const [index, operation] of queue.entries()) {
+    if (operation.kind !== "reorder_selected") {
+      continue;
+    }
+
+    if (batchBaseVersion === undefined) {
+      batchBaseVersion = operation.baseServerVersion;
+      continue;
+    }
+
+    if (operation.baseServerVersion !== batchBaseVersion) {
+      endIndex = index;
+      break;
+    }
+  }
+
+  return {
+    operations: queue.slice(0, endIndex),
+    remaining: queue.slice(endIndex),
+    baseServerVersion: batchBaseVersion,
+  };
+}
+
 export function useSelectionMutationQueue() {
-  const queuedRef = useRef(new Map<number, QueuedSelectionOperation>());
+  const queuedRef = useRef<QueuedSelectionOperation[]>([]);
 
   const inFlightRef = useRef<InFlightSelectionBatch | null>(null);
   const reconciliationRef = useRef<SelectionReconciliation | null>(null);
 
-  const generationRef = useRef(0);
-  const sequenceRef = useRef(0);
+  //const generationRef = useRef(0);
+  //const sequenceRef = useRef(0);
   const batchIdRef = useRef(0);
   const mountedRef = useRef(false);
 
@@ -122,9 +299,13 @@ export function useSelectionMutationQueue() {
   const [availableRevision, setAvailableRevision] = useState(0);
   const [selectedRevision, setSelectedRevision] = useState(0);
 
+  const [optimisticReorders, setOptimisticReorders] = useState<
+    readonly OptimisticReorderOperation[]
+  >([]);
+
   const [error, setError] = useState<SelectionQueueError | null>(null);
 
-  const publishOptimisticSelection = useCallback(() => {
+  const publishOptimisticState = useCallback(() => {
     setOptimisticSelection(
       buildOptimisticSelection(
         queuedRef.current,
@@ -132,7 +313,94 @@ export function useSelectionMutationQueue() {
         reconciliationRef.current,
       ),
     );
+
+    setOptimisticReorders(
+      buildOptimisticReorders(
+        queuedRef.current,
+        inFlightRef.current,
+        reconciliationRef.current,
+      ),
+    );
   }, []);
+
+  const startReconciliation = useCallback(
+    (
+      snapshot: InFlightSelectionBatch,
+      operations: readonly InFlightSelectionOperation[],
+      message: string | null,
+    ) => {
+      if (inFlightRef.current?.batchId !== snapshot.batchId) {
+        return;
+      }
+
+      const requiresAvailable = snapshotHasSelection(operations);
+      const requiresSelected =
+        requiresAvailable || snapshotHasReorder(operations);
+
+      if (!requiresAvailable && !requiresSelected) {
+        inFlightRef.current = null;
+
+        setError(
+          message === null
+            ? null
+            : {
+                message,
+                retryable: false,
+              },
+        );
+
+        publishOptimisticState();
+        return;
+      }
+
+      const nextAvailableRevision = requiresAvailable
+        ? availableRevisionRef.current + 1
+        : availableRevisionRef.current;
+
+      const nextSelectedRevision = requiresSelected
+        ? selectedRevisionRef.current + 1
+        : selectedRevisionRef.current;
+
+      if (requiresAvailable) {
+        availableRevisionRef.current = nextAvailableRevision;
+      }
+
+      if (requiresSelected) {
+        selectedRevisionRef.current = nextSelectedRevision;
+      }
+
+      reconciliationRef.current = {
+        batchId: snapshot.batchId,
+        operations,
+        availableRevision: nextAvailableRevision,
+        selectedRevision: nextSelectedRevision,
+        availableReconciled: !requiresAvailable,
+        selectedReconciled: !requiresSelected,
+      };
+
+      inFlightRef.current = null;
+
+      setError(
+        message === null
+          ? null
+          : {
+              message,
+              retryable: false,
+            },
+      );
+
+      publishOptimisticState();
+
+      if (requiresAvailable) {
+        setAvailableRevision(nextAvailableRevision);
+      }
+
+      if (requiresSelected) {
+        setSelectedRevision(nextSelectedRevision);
+      }
+    },
+    [publishOptimisticState],
+  );
 
   const resolveRejectedSnapshot = useCallback(
     (snapshot: InFlightSelectionBatch, message: string) => {
@@ -141,7 +409,11 @@ export function useSelectionMutationQueue() {
       }
 
       for (const operation of snapshot.operations) {
-        rebaseQueuedOperation(
+        if (operation.kind !== "set_selection") {
+          continue;
+        }
+
+        queuedRef.current = rebaseQueuedSetSelection(
           queuedRef.current,
           operation.id,
           operation.baseSelected,
@@ -155,9 +427,9 @@ export function useSelectionMutationQueue() {
         retryable: false,
       });
 
-      publishOptimisticSelection();
+      publishOptimisticState();
     },
-    [publishOptimisticSelection],
+    [publishOptimisticState],
   );
 
   const resolveResponse = useCallback(
@@ -178,20 +450,24 @@ export function useSelectionMutationQueue() {
         if (result.success) {
           successfulOperations.push(operation);
 
-          rebaseQueuedOperation(
-            queuedRef.current,
-            operation.id,
-            operation.selected,
-          );
+          if (operation.kind === "set_selection") {
+            queuedRef.current = rebaseQueuedSetSelection(
+              queuedRef.current,
+              operation.id,
+              operation.selected,
+            );
+          }
 
           return;
         }
 
-        rebaseQueuedOperation(
-          queuedRef.current,
-          operation.id,
-          operation.baseSelected,
-        );
+        if (operation.kind === "set_selection") {
+          queuedRef.current = rebaseQueuedSetSelection(
+            queuedRef.current,
+            operation.id,
+            operation.baseSelected,
+          );
+        }
       });
 
       const domainFailureMessage = failureMessage(response);
@@ -208,9 +484,11 @@ export function useSelectionMutationQueue() {
               },
         );
 
-        publishOptimisticSelection();
+        publishOptimisticState();
         return;
       }
+
+      startReconciliation(snapshot, successfulOperations, domainFailureMessage);
 
       const nextAvailableRevision = availableRevisionRef.current + 1;
 
@@ -238,23 +516,25 @@ export function useSelectionMutationQueue() {
             },
       );
 
-      publishOptimisticSelection();
+      publishOptimisticState();
 
       setAvailableRevision(nextAvailableRevision);
       setSelectedRevision(nextSelectedRevision);
     },
-    [publishOptimisticSelection],
+    [publishOptimisticState, startReconciliation],
   );
 
   const sendSnapshot = useCallback(
     async (snapshot: InFlightSelectionBatch) => {
       try {
-        const response = await updateSelectionBatch({
-          operations: snapshot.operations.map(({ id, selected }) => ({
-            id,
-            selected,
-          })),
-        });
+        const request: SelectionBatchRequest = {
+          operations: snapshot.operations.map(toHttpOperation),
+          ...(snapshot.baseServerVersion === undefined
+            ? {}
+            : { baseServerVersion: snapshot.baseServerVersion }),
+        };
+
+        const response = await updateSelectionBatch(request);
 
         if (!mountedRef.current) {
           return;
@@ -262,13 +542,23 @@ export function useSelectionMutationQueue() {
 
         observeServerVersion(response.serverVersion);
         resolveResponse(snapshot, response);
-
-        resolveResponse(snapshot, response);
       } catch (requestError) {
         if (
           !mountedRef.current ||
           inFlightRef.current?.batchId !== snapshot.batchId
         ) {
+          return;
+        }
+
+        if (requestError instanceof StaleServerVersionError) {
+          observeServerVersion(requestError.serverVersion);
+
+          startReconciliation(
+            snapshot,
+            snapshot.operations,
+            requestError.message,
+          );
+
           return;
         }
 
@@ -291,48 +581,62 @@ export function useSelectionMutationQueue() {
           retryable: true,
         });
 
-        publishOptimisticSelection();
+        publishOptimisticState();
       }
     },
-    [publishOptimisticSelection, resolveRejectedSnapshot, resolveResponse],
+    [
+      publishOptimisticState,
+      resolveRejectedSnapshot,
+      resolveResponse,
+      startReconciliation,
+    ],
   );
 
   const flush = useCallback(() => {
     if (
-      queuedRef.current.size === 0 ||
+      queuedRef.current.length === 0 ||
       inFlightRef.current !== null ||
       reconciliationRef.current !== null
     ) {
       return;
     }
 
-    const operations = [...queuedRef.current.values()]
-      .sort((left, right) => left.sequence - right.sequence)
-      .map<InFlightSelectionOperation>((operation) => ({
-        ...operation,
-      }));
+    // const operations = [...queuedRef.current.values()]
+    //   .sort((left, right) => left.sequence - right.sequence)
+    //   .map<InFlightSelectionOperation>((operation) => ({
+    //     ...operation,
+    //   }));
 
-    for (const operation of operations) {
-      const queued = queuedRef.current.get(operation.id);
+    // for (const operation of operations) {
+    //   const queued = queuedRef.current.get(operation.id);
 
-      if (queued?.generation === operation.generation) {
-        queuedRef.current.delete(operation.id);
-      }
+    //   if (queued?.generation === operation.generation) {
+    //     queuedRef.current.delete(operation.id);
+    //   }
+    // }
+
+    const snapshotData = takeSnapshotOperations(queuedRef.current);
+
+    if (snapshotData.operations.length === 0) {
+      return;
     }
+
+    queuedRef.current = snapshotData.remaining;
 
     const snapshot: InFlightSelectionBatch = {
       batchId: ++batchIdRef.current,
-      operations,
+      operations: snapshotData.operations,
+      baseServerVersion: snapshotData.baseServerVersion,
       status: "requesting",
     };
 
     inFlightRef.current = snapshot;
 
     setError(null);
-    publishOptimisticSelection();
+    publishOptimisticState();
 
     void sendSnapshot(snapshot);
-  }, [publishOptimisticSelection, sendSnapshot]);
+  }, [publishOptimisticState, sendSnapshot]);
 
   const flushRef = useRef(flush);
 
@@ -355,55 +659,130 @@ export function useSelectionMutationQueue() {
 
   const queueSelection = useCallback(
     (id: number, selected: boolean) => {
-      const queued = queuedRef.current.get(id);
+      const queue = queuedRef.current;
+      let barrierIndex = -1;
 
-      const inFlightOperation = inFlightRef.current?.operations.find(
-        (operation) => operation.id === id,
-      );
+      for (let index = queue.length - 1; index >= 0; index--) {
+        if (reorderDependsOnId(queue[index]!, id)) {
+          barrierIndex = index;
+          break;
+        }
+      }
 
-      const reconciliationOperation =
-        reconciliationRef.current?.operations.find(
-          (operation) => operation.id === id,
+      let existingIndex = -1;
+
+      for (let index = queue.length - 1; index > barrierIndex; index--) {
+        const operation = queue[index];
+
+        if (operation?.kind === "set_selection" && operation.id === id) {
+          existingIndex = index;
+          break;
+        }
+      }
+
+      if (existingIndex >= 0) {
+        const existing = queue[existingIndex];
+
+        if (existing?.kind !== "set_selection") {
+          return;
+        }
+
+        if (existing.selected === selected) {
+          return;
+        }
+
+        const next = [...queue];
+
+        if (selected === existing.baseSelected) {
+          next.splice(existingIndex, 1);
+        } else {
+          next[existingIndex] = {
+            ...existing,
+            selected,
+          };
+        }
+
+        queuedRef.current = next;
+
+        setError((previous) =>
+          previous?.retryable === true ? previous : null,
         );
 
-      const currentDesired =
-        queued?.selected ??
-        inFlightOperation?.selected ??
-        reconciliationOperation?.selected ??
-        !selected;
-
-      if (currentDesired === selected) {
+        publishOptimisticState();
         return;
       }
 
-      const baseSelected =
-        queued?.baseSelected ??
-        inFlightOperation?.selected ??
-        reconciliationOperation?.selected ??
-        !selected;
+      let currentSelected = !selected;
 
-      if (selected === baseSelected) {
-        queuedRef.current.delete(id);
-      } else {
-        const operation: QueuedSelectionOperation = {
+      const priorOperations: readonly InFlightSelectionOperation[] = [
+        ...(reconciliationRef.current?.operations ?? []),
+        ...(inFlightRef.current?.operations ?? []),
+        ...queue,
+      ];
+
+      for (const operation of priorOperations) {
+        if (operation.kind === "set_selection" && operation.id === id) {
+          currentSelected = operation.selected;
+        }
+      }
+
+      if (currentSelected === selected) {
+        return;
+      }
+
+      queuedRef.current = [
+        ...queue,
+        {
+          kind: "set_selection",
           id,
           selected,
-          baseSelected,
-          generation: ++generationRef.current,
-          sequence: ++sequenceRef.current,
-        };
+          baseSelected: currentSelected,
+        },
+      ];
 
-        queuedRef.current.delete(id);
-        queuedRef.current.set(id, operation);
-      }
+      setError((previous) => (previous?.retryable === true ? previous : null));
 
-      if (error?.retryable !== true) {
-        setError(null);
-      }
-
-      publishOptimisticSelection();
+      publishOptimisticState();
     },
-    [error, publishOptimisticSelection],
+    [publishOptimisticState],
+  );
+
+  const queueReorder = useCallback(
+    (input: QueueReorderInput): boolean => {
+      if (input.draggedId === input.targetId || input.baseServerVersion < 0) {
+        return false;
+      }
+
+      const pendingVersions = [
+        ...queuedRef.current,
+        ...(inFlightRef.current?.operations ?? []),
+        ...(reconciliationRef.current?.operations ?? []),
+      ].flatMap((operation) =>
+        operation.kind === "reorder_selected"
+          ? [operation.baseServerVersion]
+          : [],
+      );
+
+      if (
+        pendingVersions.some((version) => version !== input.baseServerVersion)
+      ) {
+        return false;
+      }
+
+      queuedRef.current = [
+        ...queuedRef.current,
+        {
+          kind: "reorder_selected",
+          ...input,
+        },
+      ];
+
+      setError((previous) => (previous?.retryable === true ? previous : null));
+      publishOptimisticState();
+
+      return true;
+    },
+    [publishOptimisticState],
   );
 
   const retry = useCallback(() => {
@@ -421,10 +800,10 @@ export function useSelectionMutationQueue() {
     inFlightRef.current = retrySnapshot;
 
     setError(null);
-    publishOptimisticSelection();
+    publishOptimisticState();
 
     void sendSnapshot(retrySnapshot);
-  }, [publishOptimisticSelection, sendSnapshot]);
+  }, [publishOptimisticState, sendSnapshot]);
 
   const confirmAvailableRevision = useCallback(
     (revision: number) => {
@@ -449,9 +828,9 @@ export function useSelectionMutationQueue() {
         reconciliationRef.current = updated;
       }
 
-      publishOptimisticSelection();
+      publishOptimisticState();
     },
-    [publishOptimisticSelection],
+    [publishOptimisticState],
   );
 
   const confirmSelectedRevision = useCallback(
@@ -477,9 +856,9 @@ export function useSelectionMutationQueue() {
         reconciliationRef.current = updated;
       }
 
-      publishOptimisticSelection();
+      publishOptimisticState();
     },
-    [publishOptimisticSelection],
+    [publishOptimisticState],
   );
 
   return {
@@ -487,9 +866,11 @@ export function useSelectionMutationQueue() {
     availableRevision,
     selectedRevision,
     error,
+    optimisticReorders,
     queueSelection,
     retry,
     confirmAvailableRevision,
     confirmSelectedRevision,
+    queueReorder,
   };
 }
