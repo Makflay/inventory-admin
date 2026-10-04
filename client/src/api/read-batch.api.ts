@@ -10,6 +10,7 @@ import type {
 } from "@inventory/shared";
 
 import { ApiRequestError, readApiErrorResponse } from "./api-error";
+import { isValidServerVersion } from "../services/server-version";
 
 const PAGE_SIZE = 20;
 
@@ -181,7 +182,8 @@ function isReadBatchResponse(
   if (
     !isObject(value) ||
     !Array.isArray(value.results) ||
-    value.results.length !== request.operations.length
+    value.results.length !== request.operations.length ||
+    !isValidServerVersion(value.serverVersion)
   ) {
     return false;
   }

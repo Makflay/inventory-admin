@@ -213,4 +213,8 @@ export class AvailableItemsCache {
     this.entries.delete(key);
     this.entries.set(key, entry);
   }
+
+  clear(): void {
+    this.entries.clear();
+  }
 }

@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 
 import type { SelectedItemsPageRequest } from "@inventory/shared";
+import type { CachedSelectedPage } from "../services/selected-items-cache";
 
 import { ApiRequestError } from "../api/api-error";
 import { SelectedItemsCache } from "../services/selected-items-cache";
-import type { CachedSelectedPage } from "../services/selected-items-cache";
-import { readRequestManager } from "../services/read-request-manager";
+
+import {
+  readRequestManager,
+  StaleReadError,
+} from "../services/read-request-manager";
+import {
+  getLatestKnownServerVersion,
+  subscribeToServerVersion,
+} from "../services/server-version";
 
 type LoadError = {
   request: SelectedItemsPageRequest;
@@ -39,6 +47,11 @@ export function useSelectedItems(
     error: null,
     initialized: false,
   });
+  const cacheVersionRef = useRef<number | null>(null);
+
+  const requestPageRef = useRef<
+    (request: SelectedItemsPageRequest, retry?: boolean) => Promise<void>
+  >(async () => undefined);
 
   const mountedRef = useRef(false);
   const requestRef = useRef<AbortController | null>(null);
@@ -52,6 +65,23 @@ export function useSelectedItems(
         (errorRef.current !== null && !retry)
       ) {
         return;
+      }
+
+      const latestVersion = getLatestKnownServerVersion();
+
+      if (
+        cacheVersionRef.current !== null &&
+        cacheVersionRef.current < latestVersion
+      ) {
+        cache.clear();
+        cacheVersionRef.current = null;
+
+        setState({
+          pages: [],
+          loading: null,
+          error: null,
+          initialized: false,
+        });
       }
 
       if (cache.read(request) !== undefined) {
@@ -88,12 +118,41 @@ export function useSelectedItems(
         error: null,
       }));
 
+      let restartInitial = false;
+
       try {
-        const page = await readRequestManager.readSelected(
-          controller.signal,
-          request,
-          freshnessToken,
-        );
+        let result:
+          | Awaited<ReturnType<typeof readRequestManager.readSelected>>
+          | undefined;
+
+        for (let staleAttempt = 0; staleAttempt < 2; staleAttempt++) {
+          try {
+            result = await readRequestManager.readSelected(
+              controller.signal,
+              request,
+              freshnessToken,
+            );
+
+            break;
+          } catch (error) {
+            if (
+              error instanceof StaleReadError &&
+              staleAttempt === 0 &&
+              !controller.signal.aborted
+            ) {
+              continue;
+            }
+
+            throw error;
+          }
+        }
+
+        if (result === undefined) {
+          throw new ApiRequestError(
+            "STALE_READ",
+            "Данные изменились во время загрузки. Попробуйте снова.",
+          );
+        }
 
         if (
           controller.signal.aborted ||
@@ -103,13 +162,40 @@ export function useSelectedItems(
           return;
         }
 
-        const visibleKeys = beforeChange();
+        const currentCacheVersion = cacheVersionRef.current;
 
+        if (
+          currentCacheVersion !== null &&
+          result.serverVersion > currentCacheVersion
+        ) {
+          cache.clear();
+          cacheVersionRef.current = result.serverVersion;
+
+          if (request.after !== undefined || request.before !== undefined) {
+            restartInitial = true;
+
+            setState({
+              pages: [],
+              loading: initialRequest,
+              error: null,
+              initialized: false,
+            });
+
+            return;
+          }
+        } else if (currentCacheVersion === null) {
+          cacheVersionRef.current = result.serverVersion;
+        }
+
+        const visibleKeys = beforeChange();
         for (const key of visibleKeys) {
           cache.touch(key);
         }
+        cache.insert(result.page, request, visibleKeys);
 
-        cache.insert(page, request, visibleKeys);
+        // cache.clear();
+        // cacheVersionRef.current = result.serverVersion;
+        // cache.insert(result.page, request, visibleKeys);
 
         setState({
           pages: cache.snapshot(),
@@ -130,9 +216,11 @@ export function useSelectedItems(
         const failure: LoadError = {
           request,
           message:
-            error instanceof ApiRequestError
-              ? error.message
-              : "Не удалось загрузить выбранные элементы. Попробуйте снова.",
+            error instanceof StaleReadError
+              ? "Данные изменились во время загрузки. Попробуйте снова."
+              : error instanceof ApiRequestError
+                ? error.message
+                : "Не удалось загрузить выбранные элементы. Попробуйте снова.",
         };
 
         errorRef.current = failure;
@@ -146,28 +234,72 @@ export function useSelectedItems(
         if (requestRef.current === controller) {
           requestRef.current = null;
         }
+
+        if (restartInitial && mountedRef.current) {
+          queueMicrotask(() => {
+            if (mountedRef.current) {
+              void requestPageRef.current(initialRequest);
+            }
+          });
+        }
       }
     },
-    [cache, beforeChange, freshnessToken],
+    [cache, beforeChange, freshnessToken, initialRequest],
   );
+
+  useEffect(() => {
+    requestPageRef.current = requestPage;
+  }, [requestPage]);
 
   useEffect(() => {
     mountedRef.current = true;
     let cancelled = false;
 
-    void Promise.resolve().then(() => {
+    const unsubscribe = subscribeToServerVersion((observedVersion) => {
+      if (
+        !mountedRef.current ||
+        cacheVersionRef.current === null ||
+        observedVersion <= cacheVersionRef.current
+      ) {
+        return;
+      }
+
+      requestRef.current?.abort();
+      requestRef.current = null;
+      errorRef.current = null;
+
+      cache.clear();
+      cacheVersionRef.current = null;
+
+      setState({
+        pages: [],
+        loading: initialRequest,
+        error: null,
+        initialized: false,
+      });
+
+      queueMicrotask(() => {
+        if (mountedRef.current) {
+          void requestPageRef.current(initialRequest);
+        }
+      });
+    });
+
+    queueMicrotask(() => {
       if (!cancelled) {
-        void requestPage(initialRequest);
+        void requestPageRef.current(initialRequest);
       }
     });
 
     return () => {
       cancelled = true;
       mountedRef.current = false;
+      unsubscribe();
+
       requestRef.current?.abort();
       requestRef.current = null;
     };
-  }, [requestPage, initialRequest]);
+  }, [cache, initialRequest]);
 
   const loadPage = useCallback(
     (request: SelectedItemsPageRequest) => {

@@ -1,12 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { SelectionBatchResponse } from "@inventory/shared";
-
-import { ApiRequestError } from "../api/api-error";
-import {
-  SelectionBatchRejectedError,
-  updateSelectionBatch,
-} from "../api/selected-items.api";
 import type {
   InFlightSelectionBatch,
   InFlightSelectionOperation,
@@ -16,6 +10,13 @@ import type {
   SelectionQueueError,
   SelectionReconciliation,
 } from "../types/selection";
+
+import { ApiRequestError } from "../api/api-error";
+import {
+  SelectionBatchRejectedError,
+  updateSelectionBatch,
+} from "../api/selected-items.api";
+import { observeServerVersion } from "../services/server-version";
 
 const FLUSH_INTERVAL_MS = 1000;
 
@@ -258,6 +259,9 @@ export function useSelectionMutationQueue() {
         if (!mountedRef.current) {
           return;
         }
+
+        observeServerVersion(response.serverVersion);
+        resolveResponse(snapshot, response);
 
         resolveResponse(snapshot, response);
       } catch (requestError) {

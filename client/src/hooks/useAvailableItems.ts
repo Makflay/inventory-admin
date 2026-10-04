@@ -5,7 +5,14 @@ import type { AvailableItemsPageRequest } from "@inventory/shared";
 import { AvailableItemsCache } from "../services/available-items-cache";
 import type { CachedPage } from "../services/available-items-cache";
 import { ApiRequestError } from "../api/api-error";
-import { readRequestManager } from "../services/read-request-manager";
+import {
+  readRequestManager,
+  StaleReadError,
+} from "../services/read-request-manager";
+import {
+  getLatestKnownServerVersion,
+  subscribeToServerVersion,
+} from "../services/server-version";
 
 type LoadError = {
   request: AvailableItemsPageRequest;
@@ -40,6 +47,10 @@ export function useAvailableItems(
     error: null,
     initialized: false,
   });
+  const cacheVersionRef = useRef<number | null>(null);
+  const requestPageRef = useRef<
+    (request: AvailableItemsPageRequest, retry?: boolean) => Promise<void>
+  >(async () => undefined);
 
   const mountedRef = useRef(false);
   const requestRef = useRef<AbortController | null>(null);
@@ -53,6 +64,23 @@ export function useAvailableItems(
         (errorRef.current !== null && !retry)
       ) {
         return;
+      }
+
+      const latestVersion = getLatestKnownServerVersion();
+
+      if (
+        cacheVersionRef.current !== null &&
+        cacheVersionRef.current < latestVersion
+      ) {
+        cache.clear();
+        cacheVersionRef.current = null;
+
+        setState({
+          pages: [],
+          loading: null,
+          error: null,
+          initialized: false,
+        });
       }
 
       if (cache.read(request) !== undefined) {
@@ -88,12 +116,41 @@ export function useAvailableItems(
         error: null,
       }));
 
+      let restartInitial = false;
+
       try {
-        const page = await readRequestManager.readAvailable(
-          controller.signal,
-          request,
-          freshnessToken,
-        );
+        let result:
+          | Awaited<ReturnType<typeof readRequestManager.readAvailable>>
+          | undefined;
+
+        for (let staleAttempt = 0; staleAttempt < 2; staleAttempt++) {
+          try {
+            result = await readRequestManager.readAvailable(
+              controller.signal,
+              request,
+              freshnessToken,
+            );
+
+            break;
+          } catch (error) {
+            if (
+              error instanceof StaleReadError &&
+              staleAttempt === 0 &&
+              !controller.signal.aborted
+            ) {
+              continue;
+            }
+
+            throw error;
+          }
+        }
+
+        if (result === undefined) {
+          throw new ApiRequestError(
+            "STALE_READ",
+            "Данные изменились во время загрузки. Попробуйте снова.",
+          );
+        }
 
         if (
           controller.signal.aborted ||
@@ -103,13 +160,38 @@ export function useAvailableItems(
           return;
         }
 
+        const currentCacheVersion = cacheVersionRef.current;
+
+        if (
+          currentCacheVersion !== null &&
+          result.serverVersion > currentCacheVersion
+        ) {
+          cache.clear();
+          cacheVersionRef.current = result.serverVersion;
+
+          if (request.after !== undefined || request.before !== undefined) {
+            restartInitial = true;
+
+            setState({
+              pages: [],
+              loading: initialRequest,
+              error: null,
+              initialized: false,
+            });
+
+            return;
+          }
+        } else if (currentCacheVersion === null) {
+          cacheVersionRef.current = result.serverVersion;
+        }
+
         const visibleKeys = beforeChange();
 
         for (const key of visibleKeys) {
           cache.touch(key);
         }
 
-        cache.insert(page, request, visibleKeys);
+        cache.insert(result.page, request, visibleKeys);
 
         setState({
           pages: cache.snapshot(),
@@ -130,9 +212,11 @@ export function useAvailableItems(
         const failure: LoadError = {
           request,
           message:
-            error instanceof ApiRequestError
-              ? error.message
-              : "Не удалось загрузить элементы. Попробуйте снова.",
+            error instanceof StaleReadError
+              ? "Данные изменились во время загрузки. Попробуйте снова."
+              : error instanceof ApiRequestError
+                ? error.message
+                : "Не удалось загрузить элементы. Попробуйте снова.",
         };
 
         errorRef.current = failure;
@@ -146,18 +230,60 @@ export function useAvailableItems(
         if (requestRef.current === controller) {
           requestRef.current = null;
         }
+
+        if (restartInitial && mountedRef.current) {
+          queueMicrotask(() => {
+            if (mountedRef.current) {
+              void requestPageRef.current(initialRequest);
+            }
+          });
+        }
       }
     },
-    [cache, freshnessToken, beforeChange],
+    [cache, freshnessToken, initialRequest, beforeChange],
   );
+
+  useEffect(() => {
+    requestPageRef.current = requestPage;
+  }, [requestPage]);
 
   useEffect(() => {
     mountedRef.current = true;
     let cancelled = false;
 
-    void Promise.resolve().then(() => {
+    const unsubscribe = subscribeToServerVersion((observedVersion) => {
+      if (
+        !mountedRef.current ||
+        cacheVersionRef.current === null ||
+        observedVersion <= cacheVersionRef.current
+      ) {
+        return;
+      }
+
+      requestRef.current?.abort();
+      requestRef.current = null;
+      errorRef.current = null;
+
+      cache.clear();
+      cacheVersionRef.current = null;
+
+      setState({
+        pages: [],
+        loading: initialRequest,
+        error: null,
+        initialized: false,
+      });
+
+      queueMicrotask(() => {
+        if (mountedRef.current) {
+          void requestPageRef.current(initialRequest);
+        }
+      });
+    });
+
+    queueMicrotask(() => {
       if (!cancelled) {
-        void requestPage(initialRequest);
+        void requestPageRef.current(initialRequest);
       }
     });
 
@@ -166,8 +292,9 @@ export function useAvailableItems(
       mountedRef.current = false;
       requestRef.current?.abort();
       requestRef.current = null;
+      unsubscribe();
     };
-  }, [requestPage, initialRequest]);
+  }, [cache, initialRequest]);
 
   const loadPage = useCallback(
     (request: AvailableItemsPageRequest) => {

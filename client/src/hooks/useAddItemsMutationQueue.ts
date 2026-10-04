@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { AddItemsBatchResponse } from "@inventory/shared";
-
-import { AdditionBatchRejectedError, addItemsBatch } from "../api/items.api";
-import { ApiRequestError } from "../api/api-error";
 import type {
   AdditionInFlight,
   AdditionQueueError,
   AdditionReconciliation,
   PendingAdditions,
 } from "../types/add-items";
+
+import { AdditionBatchRejectedError, addItemsBatch } from "../api/items.api";
+import { ApiRequestError } from "../api/api-error";
+import { observeServerVersion } from "../services/server-version";
 
 const FLUSH_INTERVAL_MS = 10_000;
 
@@ -168,6 +169,9 @@ export function useAddItemsMutationQueue() {
         if (!mountedRef.current) {
           return;
         }
+
+        observeServerVersion(response.serverVersion);
+        resolveResponse(snapshot, response);
 
         resolveResponse(snapshot, response);
       } catch (requestError) {

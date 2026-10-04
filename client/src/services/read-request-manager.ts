@@ -9,6 +9,7 @@ import type {
 
 import { ApiRequestError } from "../api/api-error";
 import { executeReadBatch } from "../api/read-batch.api";
+import { observeServerVersion } from "./server-version";
 
 const COOLDOWN_MS = 1_000;
 
@@ -31,14 +32,21 @@ export type ReadDescriptor =
       freshnessToken: string;
     };
 
-type ReadPage = AvailableItemsPage | SelectedItemsPage;
 type SchedulerState = "idle" | "leading-scheduled" | "cooldown";
+
+export type VersionedReadResult<TPage> = {
+  page: TPage;
+  serverVersion: number;
+};
+
+type ReadPage = AvailableItemsPage | SelectedItemsPage;
+type VersionedReadPage = VersionedReadResult<ReadPage>;
 
 type Consumer = {
   active: boolean;
   signal: AbortSignal;
   abortListener: () => void;
-  resolve: (page: ReadPage) => void;
+  resolve: (page: VersionedReadPage) => void;
   reject: (error: unknown) => void;
 };
 
@@ -56,6 +64,13 @@ type PhysicalBatchEntry = {
   requestId: string;
   batchId: number;
 };
+
+export class StaleReadError extends Error {
+  constructor() {
+    super("Read response is stale");
+    this.name = "StaleReadError";
+  }
+}
 
 function abortError(): DOMException {
   return new DOMException("The operation was aborted.", "AbortError");
@@ -148,7 +163,7 @@ class ReadRequestManager {
     signal: AbortSignal,
     request: AvailableItemsPageRequest,
     freshnessToken: string,
-  ): Promise<AvailableItemsPage> {
+  ): Promise<VersionedReadResult<AvailableItemsPage>> {
     const descriptor: ReadDescriptor = {
       type: "available",
       search: request.search ?? "",
@@ -156,14 +171,16 @@ class ReadRequestManager {
       freshnessToken,
     };
 
-    return this.subscribe(descriptor, signal) as Promise<AvailableItemsPage>;
+    return this.subscribe(descriptor, signal) as Promise<
+      VersionedReadResult<AvailableItemsPage>
+    >;
   }
 
   readSelected(
     signal: AbortSignal,
     request: SelectedItemsPageRequest,
     freshnessToken: string,
-  ): Promise<SelectedItemsPage> {
+  ): Promise<VersionedReadResult<SelectedItemsPage>> {
     const descriptor: ReadDescriptor = {
       type: "selected",
       search: request.search ?? "",
@@ -171,13 +188,15 @@ class ReadRequestManager {
       freshnessToken,
     };
 
-    return this.subscribe(descriptor, signal) as Promise<SelectedItemsPage>;
+    return this.subscribe(descriptor, signal) as Promise<
+      VersionedReadResult<SelectedItemsPage>
+    >;
   }
 
   private subscribe(
     descriptor: ReadDescriptor,
     signal: AbortSignal,
-  ): Promise<ReadPage> {
+  ): Promise<VersionedReadPage> {
     if (signal.aborted) {
       return Promise.reject(abortError());
     }
@@ -203,7 +222,7 @@ class ReadRequestManager {
 
     const consumerId = Symbol(key);
 
-    return new Promise<ReadPage>((resolve, reject) => {
+    return new Promise<VersionedReadPage>((resolve, reject) => {
       const abortListener = () => {
         const currentEntry = this.entriesByKey.get(key);
         const consumer = currentEntry?.consumers.get(consumerId);
@@ -308,6 +327,17 @@ class ReadRequestManager {
       operations,
     }).then(
       (response) => {
+        const observation = observeServerVersion(response.serverVersion);
+        if (observation === "stale") {
+          const staleError = new StaleReadError();
+
+          for (const item of snapshot) {
+            this.rejectEntry(item, staleError);
+          }
+
+          return;
+        }
+
         const resultsById = new Map(
           response.results.map((result) => [result.requestId, result]),
         );
@@ -327,7 +357,7 @@ class ReadRequestManager {
             continue;
           }
 
-          this.settleEntry(item, result);
+          this.settleEntry(item, result, response.serverVersion);
         }
       },
       (error: unknown) => {
@@ -360,6 +390,7 @@ class ReadRequestManager {
   private settleEntry(
     batchEntry: PhysicalBatchEntry,
     result: ReadBatchResult,
+    serverVersion: number,
   ): void {
     const entry = this.takeEntry(batchEntry);
 
@@ -376,7 +407,7 @@ class ReadRequestManager {
       return;
     }
 
-    this.resolveConsumers(entry, result.page);
+    this.resolveConsumers(entry, { page: result.page, serverVersion });
   }
 
   private rejectEntry(batchEntry: PhysicalBatchEntry, error: unknown): void {
@@ -406,7 +437,10 @@ class ReadRequestManager {
     return entry;
   }
 
-  private resolveConsumers(entry: LogicalReadEntry, page: ReadPage): void {
+  private resolveConsumers(
+    entry: LogicalReadEntry,
+    result: VersionedReadPage,
+  ): void {
     const consumers = [...entry.consumers.values()];
     entry.consumers.clear();
 
@@ -418,7 +452,7 @@ class ReadRequestManager {
       }
 
       consumer.active = false;
-      consumer.resolve(page);
+      consumer.resolve(result);
     }
   }
 

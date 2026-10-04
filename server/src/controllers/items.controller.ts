@@ -13,8 +13,8 @@ import type {
 import { itemStore } from "../services/item-store.js";
 import { parseReadPageRequest } from "../services/read-request-parser.js";
 
-const CURSOR_PATTERN = /^[1-9]\d{0,15}$/;
-const SEARCH_PATTERN = /^[1-9]\d*$/;
+//const CURSOR_PATTERN = /^[1-9]\d{0,15}$/;
+//const SEARCH_PATTERN = /^[1-9]\d*$/;
 const READ_REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
 type ValidatedSelectionBatchOperation = {
@@ -126,6 +126,7 @@ export function updateSelectionBatch(req: Request, res: Response): void {
 
   const response: SelectionBatchResponse = {
     results,
+    serverVersion: itemStore.getServerVersion(),
   };
 
   res.setHeader("Cache-Control", "no-store");
@@ -204,6 +205,7 @@ export function addItems(req: Request, res: Response): void {
 
   const response: AddItemsBatchResponse = {
     results,
+    serverVersion: itemStore.getServerVersion(),
   };
 
   res.setHeader("Cache-Control", "no-store");
@@ -234,6 +236,7 @@ export function readItemsBatch(req: Request, res: Response): void {
     return;
   }
 
+  const serverVersion = itemStore.getServerVersion();
   const rawOperations: unknown[] = req.body.operations;
   const requestIds = new Set<string>();
 
@@ -313,6 +316,7 @@ export function readItemsBatch(req: Request, res: Response): void {
 
   const response: ReadBatchResponse = {
     results,
+    serverVersion,
   };
 
   res.setHeader("Cache-Control", "no-store");
@@ -328,32 +332,8 @@ export function getAvailableItems(req: Request, res: Response): void {
   }
 
   res.setHeader("Cache-Control", "no-store");
-  res.json(itemStore.getAvailablePage(parsed.request));
+  res.json(itemStore.getAvailableSnapshot(parsed.request));
 }
-
-// function parseItemId(value: unknown, res: Response): number | null {
-//   if (typeof value !== "string" || !CURSOR_PATTERN.test(value)) {
-//     res.status(400).json({
-//       error: "INVALID_ID",
-//       message: "Не удалось определить выбранный элемент.",
-//     });
-
-//     return null;
-//   }
-
-//   const id = Number(value);
-
-//   if (!Number.isSafeInteger(id)) {
-//     res.status(400).json({
-//       error: "INVALID_ID",
-//       message: "Не удалось определить выбранный элемент.",
-//     });
-
-//     return null;
-//   }
-
-//   return id;
-// }
 
 export function getSelectedItems(req: Request, res: Response): void {
   const parsed = parseReadPageRequest(req.query);
@@ -363,19 +343,31 @@ export function getSelectedItems(req: Request, res: Response): void {
     return;
   }
 
-  const selectedRequest: SelectedItemsPageRequest = parsed.request;
+  //const selectedRequest: SelectedItemsPageRequest = parsed.request;
 
-  const page = itemStore.getSelectedPage(selectedRequest);
+  // const page = itemStore.getSelectedPage(selectedRequest);
 
-  if (page === null) {
+  // if (page === null) {
+  //   res.status(400).json({
+  //     error: "INVALID_CURSOR",
+  //     message:
+  //       "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
+  //   });
+  //   return;
+  // }
+
+  const snapshot = itemStore.getSelectedSnapshot(parsed.request);
+
+  if (snapshot === null) {
     res.status(400).json({
       error: "INVALID_CURSOR",
       message:
         "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
     });
+
     return;
   }
 
   res.setHeader("Cache-Control", "no-store");
-  res.json(page);
+  res.json(snapshot);
 }

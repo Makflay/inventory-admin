@@ -3,6 +3,8 @@ import type {
   AvailableItemsPageRequest,
   SelectedItemsPage,
   SelectedItemsPageRequest,
+  AvailableItemsReadResponse,
+  SelectedItemsReadResponse,
 } from "@inventory/shared";
 
 const BASE_ID_MIN = 1;
@@ -20,9 +22,22 @@ function matchesSearch(id: number, search: string): boolean {
 export type SetSelectionResult = "updated" | "unchanged" | "not_found";
 
 class ItemStore {
+  private serverVersion = 0;
   private readonly customIds = new Set<number>();
   private readonly selectedIds = new Set<number>();
   private readonly selectedOrder: number[] = [];
+
+  getServerVersion(): number {
+    return this.serverVersion;
+  }
+
+  private incrementServerVersion(): void {
+    if (this.serverVersion >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Server version limit reached");
+    }
+
+    this.serverVersion++;
+  }
 
   exists(id: number): boolean {
     if (!isValidId(id)) {
@@ -38,6 +53,7 @@ class ItemStore {
     }
 
     this.customIds.add(id);
+    this.incrementServerVersion();
 
     return "added";
   }
@@ -56,6 +72,7 @@ class ItemStore {
     if (selected) {
       this.selectedIds.add(id);
       this.selectedOrder.push(id);
+      this.incrementServerVersion();
 
       return "updated";
     }
@@ -67,6 +84,8 @@ class ItemStore {
     if (index >= 0) {
       this.selectedOrder.splice(index, 1);
     }
+
+    this.incrementServerVersion();
 
     return "updated";
   }
@@ -393,6 +412,32 @@ class ItemStore {
       false,
       false,
     );
+  }
+
+  getAvailableSnapshot(
+    request: AvailableItemsPageRequest = {},
+  ): AvailableItemsReadResponse {
+    const page = this.getAvailablePage(request);
+
+    return {
+      page,
+      serverVersion: this.serverVersion,
+    };
+  }
+
+  getSelectedSnapshot(
+    request: SelectedItemsPageRequest = {},
+  ): SelectedItemsReadResponse | null {
+    const page = this.getSelectedPage(request);
+
+    if (page === null) {
+      return null;
+    }
+
+    return {
+      page,
+      serverVersion: this.serverVersion,
+    };
   }
 
   private isAvailableForSearch(id: number, search: string): boolean {

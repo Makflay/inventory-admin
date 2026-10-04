@@ -49,6 +49,16 @@ export type SelectedItemsPage = {
   pageInfo: AvailableItemsPageInfo;
 };
 
+export type AvailableItemsReadResponse = {
+  page: AvailableItemsPage;
+  serverVersion: number;
+};
+
+export type SelectedItemsReadResponse = {
+  page: SelectedItemsPage;
+  serverVersion: number;
+};
+
 export type SelectionBatchOperation = {
   id: number;
   selected: boolean;
@@ -78,6 +88,7 @@ export type SelectionBatchResult =
 
 export type SelectionBatchResponse = {
   results: SelectionBatchResult[];
+  serverVersion: number;
 };
 
 export type AddItemsBatchRequest = {
@@ -108,6 +119,7 @@ export type AddItemBatchResult =
 
 export type AddItemsBatchResponse = {
   results: AddItemBatchResult[];
+  serverVersion: number;
 };
 
 export type ReadBatchOperation =
@@ -154,4 +166,5 @@ export type ReadBatchResult =
 
 export type ReadBatchResponse = {
   results: ReadBatchResult[];
+  serverVersion: number;
 };

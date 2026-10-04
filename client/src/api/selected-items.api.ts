@@ -5,6 +5,7 @@ import type {
 } from "@inventory/shared";
 
 import { ApiRequestError, readApiErrorResponse } from "./api-error";
+import { isValidServerVersion } from "../services/server-version";
 
 //const PAGE_SIZE = 20;
 
@@ -54,7 +55,9 @@ function isSelectionBatchResponse(
     value === null ||
     !("results" in value) ||
     !Array.isArray(value.results) ||
-    value.results.length !== request.operations.length
+    value.results.length !== request.operations.length ||
+    !("serverVersion" in value) ||
+    !isValidServerVersion(value.serverVersion)
   ) {
     return false;
   }
