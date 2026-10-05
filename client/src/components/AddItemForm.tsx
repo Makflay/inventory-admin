@@ -10,9 +10,11 @@ const POSITIVE_ID_PATTERN = /^[1-9]\d*$/;
 export function AddItemForm({ onAdd }: AddItemFormProps) {
   const [inputValue, setInputValue] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   const handleSubmit = () => {
     if (!POSITIVE_ID_PATTERN.test(inputValue)) {
+      setInfoMessage(null);
       setErrorMessage("Введите положительный ID без ведущих нулей.");
       return;
     }
@@ -20,6 +22,7 @@ export function AddItemForm({ onAdd }: AddItemFormProps) {
     const id = Number(inputValue);
 
     if (!Number.isSafeInteger(id)) {
+      setInfoMessage(null);
       setErrorMessage("Введите ID допустимого размера.");
       return;
     }
@@ -27,12 +30,14 @@ export function AddItemForm({ onAdd }: AddItemFormProps) {
     const result = onAdd(id);
 
     if (result === "already-pending") {
+      setInfoMessage(null);
       setErrorMessage("Этот ID уже ожидает добавления.");
       return;
     }
 
     setInputValue("");
     setErrorMessage(null);
+    setInfoMessage(null);
   };
 
   return (
@@ -43,10 +48,11 @@ export function AddItemForm({ onAdd }: AddItemFormProps) {
         label="Новый ID"
         value={inputValue}
         error={errorMessage !== null}
-        helperText={errorMessage}
+        helperText={errorMessage ?? infoMessage}
         onChange={(event) => {
           setInputValue(event.target.value);
           setErrorMessage(null);
+          setInfoMessage(null);
         }}
         onKeyDown={(event) => {
           if (event.key === "Enter") {

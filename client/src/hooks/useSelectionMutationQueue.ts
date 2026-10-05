@@ -490,36 +490,36 @@ export function useSelectionMutationQueue() {
 
       startReconciliation(snapshot, successfulOperations, domainFailureMessage);
 
-      const nextAvailableRevision = availableRevisionRef.current + 1;
+      // const nextAvailableRevision = availableRevisionRef.current + 1;
 
-      const nextSelectedRevision = selectedRevisionRef.current + 1;
+      // const nextSelectedRevision = selectedRevisionRef.current + 1;
 
-      availableRevisionRef.current = nextAvailableRevision;
-      selectedRevisionRef.current = nextSelectedRevision;
-      reconciliationRef.current = {
-        batchId: snapshot.batchId,
-        operations: successfulOperations,
-        availableRevision: nextAvailableRevision,
-        selectedRevision: nextSelectedRevision,
-        availableReconciled: false,
-        selectedReconciled: false,
-      };
+      // availableRevisionRef.current = nextAvailableRevision;
+      // selectedRevisionRef.current = nextSelectedRevision;
+      // reconciliationRef.current = {
+      //   batchId: snapshot.batchId,
+      //   operations: successfulOperations,
+      //   availableRevision: nextAvailableRevision,
+      //   selectedRevision: nextSelectedRevision,
+      //   availableReconciled: false,
+      //   selectedReconciled: false,
+      // };
 
-      inFlightRef.current = null;
+      // inFlightRef.current = null;
 
-      setError(
-        domainFailureMessage === null
-          ? null
-          : {
-              message: domainFailureMessage,
-              retryable: false,
-            },
-      );
+      // setError(
+      //   domainFailureMessage === null
+      //     ? null
+      //     : {
+      //         message: domainFailureMessage,
+      //         retryable: false,
+      //       },
+      // );
 
-      publishOptimisticState();
+      // publishOptimisticState();
 
-      setAvailableRevision(nextAvailableRevision);
-      setSelectedRevision(nextSelectedRevision);
+      // setAvailableRevision(nextAvailableRevision);
+      // setSelectedRevision(nextSelectedRevision);
     },
     [publishOptimisticState, startReconciliation],
   );

@@ -172,8 +172,6 @@ export function useAddItemsMutationQueue() {
 
         observeServerVersion(response.serverVersion);
         resolveResponse(snapshot, response);
-
-        resolveResponse(snapshot, response);
       } catch (requestError) {
         if (
           !mountedRef.current ||

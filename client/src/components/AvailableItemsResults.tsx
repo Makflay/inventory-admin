@@ -499,7 +499,9 @@ export function AvailableItemsResults({
             sx={{ mt: 1, alignItems: "center" }}
           >
             <CircularProgress size={20} aria-hidden="true" />
-            <Typography variant="body2">Загрузка элементов…</Typography>
+            <Typography variant="body2">
+              {initialized ? "Загружаем ещё элементы…" : "Загрузка элементов…"}
+            </Typography>
           </Stack>
         )}
 

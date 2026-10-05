@@ -630,7 +630,9 @@ export function SelectedItemsResults({
           rows.length === 0 &&
           detachedPendingIds.length === 0 ? (
             <Typography color="text.secondary" sx={{ py: 2 }}>
-              Нет выбранных элементов.
+              {initialized
+                ? "Загружаем ещё выбранные элементы…"
+                : "Нет выбранных элементов."}
             </Typography>
           ) : (
             <Box
