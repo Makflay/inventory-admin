@@ -1,5 +1,3 @@
-import "./App.css";
-
 import { InventoryPage } from "./pages/InventoryPage";
 
 function App() {

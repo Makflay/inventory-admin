@@ -105,14 +105,14 @@ export function InventoryPage() {
       <Typography
         component="h1"
         variant="h4"
-        sx={{ mb: 3, fontWeight: 600, flexShrink: 0 }}
+        sx={{ mb: 3, fontWeight: 600, flexShrink: 0, textAlign: "center" }}
       >
         Управление элементами
       </Typography>
 
       <Box sx={{ p: 2, flexShrink: 0 }}>
-        <Typography id="available-items-heading" component="h2" variant="h6">
-          Доступные элементы
+        <Typography component="h2" variant="h6">
+          Добавить элемент
         </Typography>
         <AddItemForm onAdd={queueAddition} />
       </Box>

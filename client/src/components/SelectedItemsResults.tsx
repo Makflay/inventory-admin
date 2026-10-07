@@ -35,35 +35,15 @@ import type {
 import type { CachedSelectedPage } from "../services/selected-items-cache";
 
 import { useSelectedItems } from "../hooks/useSelectedItems";
-import { areSelectedPagesAdjacent } from "../services/selected-items-cache";
 import { SelectedItemsLoadBoundary } from "./SelectedItemsLoadBoundary";
 import { SelectedItemRow } from "./SelectedItemRow";
+import {
+  areSelectedRowsInSameRegion,
+  buildSelectedPresentation,
+} from "../presentation/selected-items-presentation";
 
 const ROW_HEIGHT = 48;
 const OVERSCAN = 8;
-
-type ItemRow = {
-  kind: "item";
-  key: string;
-  id: number;
-  pageKey: string | null;
-  optimistic: boolean;
-  regionKey: string | null;
-};
-
-type BoundaryRow = {
-  kind: "boundary";
-  key: string;
-  before: string | null;
-  after: string | null;
-};
-
-type EndRow = {
-  kind: "end";
-  key: string;
-};
-
-type VirtualRow = ItemRow | BoundaryRow | EndRow;
 
 export type SelectedPresentationSnapshot = {
   search: string;
@@ -91,62 +71,6 @@ type SelectedItemsResultsProps = {
   onPresentationScroll: (scrollOffset: number) => void;
 };
 
-function matchesSearch(id: number, search: string): boolean {
-  return search === "" || String(id).includes(search);
-}
-
-function applyOptimisticReorders(
-  rows: VirtualRow[],
-  operations: readonly OptimisticReorderOperation[],
-  search: string,
-): VirtualRow[] {
-  const result = [...rows];
-
-  for (const operation of operations) {
-    if (operation.search !== search) {
-      continue;
-    }
-
-    const draggedIndex = result.findIndex(
-      (row) => row.kind === "item" && row.id === operation.draggedId,
-    );
-    const targetIndex = result.findIndex(
-      (row) => row.kind === "item" && row.id === operation.targetId,
-    );
-
-    if (draggedIndex < 0 || targetIndex < 0) {
-      continue;
-    }
-
-    const dragged = result[draggedIndex];
-    const target = result[targetIndex];
-
-    if (
-      dragged?.kind !== "item" ||
-      target?.kind !== "item" ||
-      dragged.regionKey === null ||
-      dragged.regionKey !== target.regionKey
-    ) {
-      continue;
-    }
-
-    result.splice(draggedIndex, 1);
-
-    const currentTargetIndex = result.findIndex(
-      (row) => row.kind === "item" && row.id === operation.targetId,
-    );
-
-    const insertionIndex =
-      operation.placement === "before"
-        ? currentTargetIndex
-        : currentTargetIndex + 1;
-
-    result.splice(insertionIndex, 0, dragged);
-  }
-
-  return result;
-}
-
 export function SelectedItemsResults({
   search,
   revision,
@@ -163,13 +87,11 @@ export function SelectedItemsResults({
   onPresentationScroll,
 }: SelectedItemsResultsProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
-
   const anchorRef = useRef<{
     key: string;
     offset: number;
   } | null>(null);
   const snapshotScrollRestoredRef = useRef(false);
-
   const captureViewportRef = useRef<() => Set<string>>(() => new Set<string>());
   const captureViewport = useCallback(() => captureViewportRef.current(), []);
   const freshnessToken = `selected=${revision}`;
@@ -184,17 +106,11 @@ export function SelectedItemsResults({
     datasetVersion,
   } = useSelectedItems(search, freshnessToken, captureViewport);
   const showingSnapshot = !initialized && fallbackSnapshot !== null;
-
   const presentationPages: readonly CachedSelectedPage[] = showingSnapshot
     ? fallbackSnapshot.pages
     : pages;
-
   const presentationInitialized = initialized || showingSnapshot;
-
   const disabled = showingSnapshot || loading !== null || error !== null;
-
-  //const disabled = loading !== null || error !== null;
-
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
@@ -202,9 +118,7 @@ export function SelectedItemsResults({
       },
     }),
   );
-
   const [draggedId, setDraggedId] = useState<number | null>(null);
-
   const pendingReorderVersions = useMemo(
     () =>
       new Set(
@@ -212,153 +126,28 @@ export function SelectedItemsResults({
       ),
     [optimisticReorders],
   );
-
   const versionEligible =
     !showingSnapshot &&
     datasetVersion !== null &&
     [...pendingReorderVersions].every((version) => version === datasetVersion);
 
-  const { rows, detachedPendingIds } = useMemo<{
-    rows: VirtualRow[];
-    detachedPendingIds: number[];
-  }>(() => {
-    const result: VirtualRow[] = [];
-    const detached: number[] = [];
-    let regionNumber = -1;
-    let regionKey: string | null = null;
-
-    for (const [pageIndex, page] of presentationPages.entries()) {
-      const previous = presentationPages[pageIndex - 1];
-
-      const hasGap =
-        previous !== undefined && !areSelectedPagesAdjacent(previous, page);
-
-      if (pageIndex === 0 || hasGap) {
-        const before = page.data.pageInfo.hasPreviousPage
-          ? page.data.pageInfo.startCursor
-          : null;
-
-        const after =
-          hasGap && previous !== undefined && previous.data.pageInfo.hasNextPage
-            ? previous.data.pageInfo.endCursor
-            : null;
-
-        if (before !== null || after !== null) {
-          result.push({
-            kind: "boundary",
-            key: `boundary:${previous?.key ?? "start"}:${page.key}`,
-            before,
-            after,
-          });
-        }
-
-        regionNumber++;
-        regionKey = `region:${regionNumber}`;
-      }
-
-      for (const id of page.data.ids) {
-        const operation = optimisticSelection.get(id);
-
-        if (operation?.action === "unselect") {
-          continue;
-        }
-
-        result.push({
-          kind: "item",
-          key: `item:${id}`,
-          id,
-          pageKey: page.key,
-          optimistic: operation?.action === "select",
-          regionKey,
-        });
-      }
-    }
-
-    const lastPage = presentationPages[presentationPages.length - 1];
-
-    if (lastPage !== undefined) {
-      if (
-        lastPage.data.pageInfo.hasNextPage &&
-        lastPage.data.pageInfo.endCursor !== null
-      ) {
-        result.push({
-          kind: "boundary",
-          key: `boundary:${lastPage.key}:end`,
-          before: null,
-          after: lastPage.data.pageInfo.endCursor,
-        });
-      } else {
-        result.push({
-          kind: "end",
-          key: "end",
-        });
-      }
-    }
-
-    for (const [id, operation] of optimisticSelection) {
-      if (operation.action !== "select" || !matchesSearch(id, search)) {
-        continue;
-      }
-
-      const alreadyConfirmed = result.some(
-        (row) => row.kind === "item" && row.id === id,
-      );
-
-      if (alreadyConfirmed) {
-        continue;
-      }
-
-      const endIndex = result.findIndex((row) => row.kind === "end");
-
-      const confirmedFilteredListIsEmpty =
-        presentationInitialized &&
-        presentationPages.length === 0 &&
-        result.length === 0;
-
-      const lastItemRegion =
-        [...result].reverse().find((row): row is ItemRow => row.kind === "item")
-          ?.regionKey ?? null;
-
-      if (endIndex >= 0) {
-        result.splice(endIndex, 0, {
-          kind: "item",
-          key: `optimistic-item:${id}`,
-          id,
-          pageKey: null,
-          optimistic: true,
-          regionKey: lastItemRegion,
-        });
-
-        continue;
-      }
-
-      if (confirmedFilteredListIsEmpty) {
-        result.push({
-          kind: "item",
-          key: `optimistic-item:${id}`,
-          id,
-          pageKey: null,
-          optimistic: true,
-          regionKey: "region:optimistic-empty",
-        });
-
-        continue;
-      }
-
-      detached.push(id);
-    }
-
-    return {
-      rows: applyOptimisticReorders(result, optimisticReorders, search),
-      detachedPendingIds: detached,
-    };
-  }, [
-    presentationPages,
-    optimisticSelection,
-    search,
-    presentationInitialized,
-    optimisticReorders,
-  ]);
+  const { rows, detachedPendingIds } = useMemo(
+    () =>
+      buildSelectedPresentation({
+        pages: presentationPages,
+        optimisticSelection,
+        optimisticReorders,
+        search,
+        initialized: presentationInitialized,
+      }),
+    [
+      presentationPages,
+      optimisticSelection,
+      search,
+      presentationInitialized,
+      optimisticReorders,
+    ],
+  );
 
   const itemById = useMemo(
     () =>
@@ -590,8 +379,7 @@ export function SelectedItemsResults({
       if (
         draggedRow === undefined ||
         targetRow === undefined ||
-        draggedRow.regionKey === null ||
-        draggedRow.regionKey !== targetRow.regionKey
+        !areSelectedRowsInSameRegion(draggedRow, targetRow)
       ) {
         return;
       }

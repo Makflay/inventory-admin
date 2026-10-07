@@ -195,11 +195,8 @@ export function useSelectedItems(
         for (const key of visibleKeys) {
           cache.touch(key);
         }
-        cache.insert(result.page, request, visibleKeys);
 
-        // cache.clear();
-        // cacheVersionRef.current = result.serverVersion;
-        // cache.insert(result.page, request, visibleKeys);
+        cache.insert(result.page, request, visibleKeys);
 
         setState({
           pages: cache.snapshot(),

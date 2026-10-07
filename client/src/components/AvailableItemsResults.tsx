@@ -24,7 +24,7 @@ import type { PendingAdditions } from "../types/add-items";
 import type { CachedPage } from "../services/available-items-cache";
 
 import { useAvailableItems } from "../hooks/useAvailableItems";
-import { areAdjacent } from "../services/available-items-cache";
+import { buildAvailablePresentation } from "../presentation/available-items-presentation";
 
 const ROW_HEIGHT = 48;
 const OVERSCAN = 8;
@@ -36,32 +36,6 @@ type BoundaryProps = {
   disabled: boolean;
   search: string;
   onLoad: (request: AvailableItemsPageRequest) => void;
-};
-
-type ItemRow = {
-  kind: "item";
-  key: string;
-  id: number;
-  pageKey: string | null;
-  optimistic: boolean;
-  pendingAddition: boolean;
-};
-
-type BoundaryRow = {
-  kind: "boundary";
-  key: string;
-  before: string | null;
-  after: string | null;
-};
-
-type EndRow = {
-  kind: "end";
-  key: string;
-};
-
-type DetachedPendingRow = {
-  id: number;
-  source: "selection" | "addition";
 };
 
 type AvailableItemsResultsProps = {
@@ -81,8 +55,6 @@ type AvailableItemsResultsProps = {
   ) => void;
   onPresentationScroll: (scrollOffset: number) => void;
 };
-
-type VirtualRow = ItemRow | BoundaryRow | EndRow;
 
 export type AvailablePresentationSnapshot = {
   search: string;
@@ -153,95 +125,6 @@ function LoadBoundary({
   return <Box ref={markerRef} aria-hidden="true" sx={{ height: ROW_HEIGHT }} />;
 }
 
-function matchesSearch(id: number, search: string): boolean {
-  return search === "" || String(id).includes(search);
-}
-
-function insertPresentationAvailableId(
-  rows: VirtualRow[],
-  id: number,
-  initialized: boolean,
-  source: "selection" | "addition",
-): boolean {
-  if (rows.some((row) => row.kind === "item" && row.id === id)) {
-    return true;
-  }
-
-  const createRow = (): ItemRow => ({
-    kind: "item",
-    key: `${source}-pending-item:${id}`,
-    id,
-    pageKey: null,
-    optimistic: source === "selection",
-    pendingAddition: source === "addition",
-  });
-
-  const itemPositions = rows.flatMap((row, index) =>
-    row.kind === "item" ? [{ index, id: row.id }] : [],
-  );
-
-  if (itemPositions.length === 0) {
-    if (initialized && rows.length === 0) {
-      rows.push(createRow());
-      return true;
-    }
-
-    return false;
-  }
-
-  const nextItemPosition = itemPositions.find((position) => position.id > id);
-
-  if (nextItemPosition !== undefined) {
-    const previousItemPosition = [...itemPositions]
-      .reverse()
-      .find((position) => position.index < nextItemPosition.index);
-
-    if (previousItemPosition === undefined) {
-      const hasBoundaryBefore = rows
-        .slice(0, nextItemPosition.index)
-        .some((row) => row.kind === "boundary");
-
-      if (hasBoundaryBefore) {
-        return false;
-      }
-
-      rows.splice(nextItemPosition.index, 0, createRow());
-
-      return true;
-    }
-
-    const hasBoundaryBetween = rows
-      .slice(previousItemPosition.index + 1, nextItemPosition.index)
-      .some((row) => row.kind === "boundary");
-
-    if (hasBoundaryBetween || previousItemPosition.id >= id) {
-      return false;
-    }
-
-    rows.splice(nextItemPosition.index, 0, createRow());
-
-    return true;
-  }
-
-  const lastItemPosition = itemPositions[itemPositions.length - 1]!;
-
-  const endIndex = rows.findIndex(
-    (row, index) => index > lastItemPosition.index && row.kind === "end",
-  );
-
-  const hasBoundaryAfter = rows
-    .slice(lastItemPosition.index + 1)
-    .some((row) => row.kind === "boundary");
-
-  if (endIndex < 0 || hasBoundaryAfter || lastItemPosition.id >= id) {
-    return false;
-  }
-
-  rows.splice(endIndex, 0, createRow());
-
-  return true;
-}
-
 export function AvailableItemsResults({
   search,
   selectionRevision,
@@ -284,132 +167,23 @@ export function AvailableItemsResults({
     0,
   );
 
-  //const disabled = loading !== null || error !== null;
-  //const count = pages.reduce((total, page) => total + page.data.ids.length, 0);
-
-  const { rows, detachedPendingRows } = useMemo<{
-    rows: VirtualRow[];
-    detachedPendingRows: DetachedPendingRow[];
-  }>(() => {
-    const result: VirtualRow[] = [];
-    const detached: DetachedPendingRow[] = [];
-
-    for (const [pageIndex, page] of presentationPages.entries()) {
-      const previous = presentationPages[pageIndex - 1];
-      const hasGap = previous !== undefined && !areAdjacent(previous, page);
-
-      if (pageIndex === 0 || hasGap) {
-        const before = page.data.pageInfo.hasPreviousPage
-          ? page.data.pageInfo.startCursor
-          : null;
-
-        const after =
-          hasGap && previous !== undefined && previous.data.pageInfo.hasNextPage
-            ? previous.data.pageInfo.endCursor
-            : null;
-
-        if (before !== null || after !== null) {
-          result.push({
-            kind: "boundary",
-            key: `boundary:${previous?.key ?? "start"}:${page.key}`,
-            before,
-            after,
-          });
-        }
-      }
-
-      for (const id of page.data.ids) {
-        const operation = optimisticSelection.get(id);
-
-        if (operation?.action === "select") {
-          continue;
-        }
-
-        result.push({
-          kind: "item",
-          key: `item:${id}`,
-          id,
-          pageKey: page.key,
-          optimistic: operation?.action === "unselect",
-          pendingAddition: pendingAdditions.has(id),
-        });
-      }
-    }
-
-    const lastPage = presentationPages[presentationPages.length - 1];
-
-    if (lastPage !== undefined) {
-      if (
-        lastPage.data.pageInfo.hasNextPage &&
-        lastPage.data.pageInfo.endCursor !== null
-      ) {
-        result.push({
-          kind: "boundary",
-          key: `boundary:${lastPage.key}:end`,
-          before: null,
-          after: lastPage.data.pageInfo.endCursor,
-        });
-      } else {
-        result.push({
-          kind: "end",
-          key: "end",
-        });
-      }
-    }
-
-    for (const [id, operation] of optimisticSelection) {
-      if (operation.action !== "unselect" || !matchesSearch(id, search)) {
-        continue;
-      }
-
-      const inserted = insertPresentationAvailableId(
-        result,
-        id,
-        presentationInitialized,
-        "selection",
-      );
-
-      if (!inserted) {
-        detached.push({ id, source: "selection" });
-      }
-    }
-
-    for (const id of pendingAdditions.keys()) {
-      if (!matchesSearch(id, search)) {
-        continue;
-      }
-
-      const alreadyRepresented = result.some(
-        (row) => row.kind === "item" && row.id === id,
-      );
-
-      if (alreadyRepresented) {
-        continue;
-      }
-
-      const inserted = insertPresentationAvailableId(
-        result,
-        id,
-        presentationInitialized,
-        "addition",
-      );
-
-      if (!inserted) {
-        detached.push({
-          id,
-          source: "addition",
-        });
-      }
-    }
-
-    return { rows: result, detachedPendingRows: detached };
-  }, [
-    presentationPages,
-    optimisticSelection,
-    pendingAdditions,
-    search,
-    presentationInitialized,
-  ]);
+  const { rows, detachedPendingRows } = useMemo(
+    () =>
+      buildAvailablePresentation({
+        pages: presentationPages,
+        optimisticSelection,
+        pendingAdditions,
+        search,
+        initialized: presentationInitialized,
+      }),
+    [
+      presentationPages,
+      optimisticSelection,
+      pendingAdditions,
+      search,
+      presentationInitialized,
+    ],
+  );
 
   const getItemKey = useCallback(
     (index: number) => rows[index]?.key ?? index,

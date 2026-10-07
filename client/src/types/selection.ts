@@ -1,6 +1,5 @@
 import type {
   ReorderSelectedOperation,
-  //SelectionMutationOperation,
   SetSelectionOperation,
 } from "@inventory/shared";
 
