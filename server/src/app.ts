@@ -4,7 +4,11 @@ import express from "express";
 import { errorHandler } from "./middleware/error-handler.js";
 import { itemsRouter } from "./routes/items.routes.js";
 
-const clientOrigin = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
+const clientOrigin = process.env.CLIENT_ORIGIN?.trim();
+
+if (!clientOrigin) {
+  throw new Error("CLIENT_ORIGIN is required");
+}
 
 export const app = express();
 

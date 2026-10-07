@@ -164,6 +164,7 @@ export function SelectedItemsResults({
     [rows],
   );
 
+  // eslint-disable-next-line react-hooks/incompatible-library
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => rootRef.current,
