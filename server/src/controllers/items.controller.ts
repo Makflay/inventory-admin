@@ -1,6 +1,5 @@
 import type { Request, Response } from "express";
 import type {
-  AvailableItemsPageRequest,
   SelectedItemsPageRequest,
   SelectionBatchResponse,
   SelectionBatchResult,
@@ -8,77 +7,15 @@ import type {
   AddItemsBatchResponse,
   ReadBatchResponse,
   ReadBatchResult,
-  SetSelectionOperation,
   ReorderSelectedOperation,
-  SelectionMutationOperation,
   StaleServerVersionResponse,
 } from "@inventory/shared";
 
 import { itemStore } from "../services/item-store.js";
 import { parseReadPageRequest } from "../services/read-request-parser.js";
+import { parseSelectionBatchRequest } from "../services/selection-batch-parser.js";
 
-//const CURSOR_PATTERN = /^[1-9]\d{0,15}$/;
-const SEARCH_PATTERN = /^[1-9]\d*$/;
 const READ_REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
-
-type ValidatedSelectionBatch = {
-  operations: SelectionMutationOperation[];
-  baseServerVersion?: number;
-};
-
-function isPositiveId(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-}
-
-function isServerVersion(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function parseSelectionOperation(
-  value: unknown,
-): SelectionMutationOperation | null {
-  if (!isObject(value) || typeof value.kind !== "string") {
-    return null;
-  }
-
-  if (value.kind === "set_selection") {
-    if (!isPositiveId(value.id) || typeof value.selected !== "boolean") {
-      return null;
-    }
-
-    const operation: SetSelectionOperation = {
-      kind: "set_selection",
-      id: value.id,
-      selected: value.selected,
-    };
-
-    return operation;
-  }
-
-  if (value.kind === "reorder_selected") {
-    if (
-      !isPositiveId(value.draggedId) ||
-      !isPositiveId(value.targetId) ||
-      (value.placement !== "before" && value.placement !== "after") ||
-      typeof value.search !== "string" ||
-      (value.search !== "" && !SEARCH_PATTERN.test(value.search))
-    ) {
-      return null;
-    }
-
-    const operation: ReorderSelectedOperation = {
-      kind: "reorder_selected",
-      draggedId: value.draggedId,
-      targetId: value.targetId,
-      placement: value.placement,
-      search: value.search,
-    };
-
-    return operation;
-  }
-
-  return null;
-}
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -123,100 +60,6 @@ function reorderFailure(
   };
 }
 
-function parseSelectionBatch(
-  body: unknown,
-  res: Response,
-): ValidatedSelectionBatch | null {
-  if (
-    !isObject(body) ||
-    //!("operations" in body) ||
-    !Array.isArray(body.operations) ||
-    body.operations.length === 0
-  ) {
-    res.status(400).json({
-      error: "INVALID_SELECTION_BATCH",
-      message:
-        "Не удалось обработать изменения выбранных элементов. Проверьте данные и попробуйте снова.",
-    });
-
-    return null;
-  }
-
-  const operations: SelectionMutationOperation[] = [];
-  //const seenIds = new Set<number>();
-
-  for (const value of body.operations) {
-    const operation = parseSelectionOperation(value);
-    if (
-      // !isObject(value) ||
-      // !("id" in value) ||
-      // typeof value.id !== "number" ||
-      // !Number.isSafeInteger(value.id) ||
-      // value.id <= 0 ||
-      // !("selected" in value) ||
-      // typeof value.selected !== "boolean"
-      operation === null
-    ) {
-      res.status(400).json({
-        error: "INVALID_SELECTION_OPERATION",
-        message:
-          "Не удалось обработать одно из изменений выбора. Проверьте данные и попробуйте снова.",
-      });
-
-      return null;
-    }
-    operations.push(operation);
-  }
-
-  // if (seenIds.has(value.id)) {
-  //   res.status(400).json({
-  //     error: "DUPLICATE_SELECTION_OPERATION",
-  //     message:
-  //       "Для одного элемента передано несколько изменений. Попробуйте снова.",
-  //   });
-
-  //   return null;
-  // }
-
-  const containsReorder = operations.some(
-    (operation) => operation.kind === "reorder_selected",
-  );
-
-  if (
-    containsReorder &&
-    (!("baseServerVersion" in body) || !isServerVersion(body.baseServerVersion))
-  ) {
-    res.status(400).json({
-      error: "INVALID_BASE_SERVER_VERSION",
-      message:
-        "Не удалось определить актуальность порядка элементов. Обновите список и попробуйте снова.",
-    });
-
-    return null;
-  }
-
-  if (
-    !containsReorder &&
-    "baseServerVersion" in body &&
-    body.baseServerVersion !== undefined
-  ) {
-    res.status(400).json({
-      error: "UNEXPECTED_BASE_SERVER_VERSION",
-      message:
-        "Не удалось обработать изменения выбранных элементов. Обновите список и попробуйте снова.",
-    });
-
-    return null;
-  }
-
-  return {
-    operations,
-    baseServerVersion: containsReorder
-      ? (body.baseServerVersion as number)
-      : undefined,
-  };
-}
-
 export function updateSelectionBatch(req: Request, res: Response): void {
   if (!req.is("application/json")) {
     res.status(415).json({
@@ -227,11 +70,18 @@ export function updateSelectionBatch(req: Request, res: Response): void {
     return;
   }
 
-  const batch = parseSelectionBatch(req.body, res);
+  const parsedBatch = parseSelectionBatchRequest(req.body);
 
-  if (batch === null) {
+  if (!parsedBatch.success) {
+    res.status(parsedBatch.failure.status).json({
+      error: parsedBatch.failure.error,
+      message: parsedBatch.failure.message,
+    });
+
     return;
   }
+
+  const batch = parsedBatch.batch;
 
   const containsReorder = batch.operations.some(
     (operation) => operation.kind === "reorder_selected",
@@ -511,19 +361,6 @@ export function getSelectedItems(req: Request, res: Response): void {
     res.status(400).json(parsed.failure);
     return;
   }
-
-  //const selectedRequest: SelectedItemsPageRequest = parsed.request;
-
-  // const page = itemStore.getSelectedPage(selectedRequest);
-
-  // if (page === null) {
-  //   res.status(400).json({
-  //     error: "INVALID_CURSOR",
-  //     message:
-  //       "Не удалось определить позицию в списке. Обновите страницу и попробуйте снова.",
-  //   });
-  //   return;
-  // }
 
   const snapshot = itemStore.getSelectedSnapshot(parsed.request);
 

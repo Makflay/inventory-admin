@@ -7,6 +7,11 @@ import type {
   SelectedItemsReadResponse,
 } from "@inventory/shared";
 
+import {
+  calculateSelectedReorder,
+  type ReorderSelectedResult,
+} from "./selected-reorder.js";
+
 const BASE_ID_MIN = 1;
 const BASE_ID_MAX = 1_000_000;
 const PAGE_SIZE = 20;
@@ -20,15 +25,6 @@ function matchesSearch(id: number, search: string): boolean {
 }
 
 export type SetSelectionResult = "updated" | "unchanged" | "not_found";
-
-export type ReorderSelectedResult =
-  | "updated"
-  | "unchanged"
-  | "dragged_not_selected"
-  | "target_not_selected"
-  | "dragged_not_matching_search"
-  | "target_not_matching_search"
-  | "same_item";
 
 class ItemStore {
   private serverVersion = 0;
@@ -105,65 +101,21 @@ class ItemStore {
     placement: "before" | "after",
     search: string,
   ): ReorderSelectedResult {
-    if (draggedId === targetId) {
-      return "same_item";
+    const calculation = calculateSelectedReorder({
+      selectedOrder: this.selectedOrder,
+      selectedIds: this.selectedIds,
+      draggedId,
+      targetId,
+      placement,
+      search,
+    });
+
+    if (calculation.status !== "updated") {
+      return calculation.status;
     }
 
-    if (!this.selectedIds.has(draggedId)) {
-      return "dragged_not_selected";
-    }
-
-    if (!this.selectedIds.has(targetId)) {
-      return "target_not_selected";
-    }
-
-    if (!matchesSearch(draggedId, search)) {
-      return "dragged_not_matching_search";
-    }
-
-    if (!matchesSearch(targetId, search)) {
-      return "target_not_matching_search";
-    }
-
-    const matchingSlots: number[] = [];
-    const matchingIds: number[] = [];
-
-    for (const [index, id] of this.selectedOrder.entries()) {
-      if (matchesSearch(id, search)) {
-        matchingSlots.push(index);
-        matchingIds.push(id);
-      }
-    }
-
-    const draggedIndex = matchingIds.indexOf(draggedId);
-
-    if (draggedIndex < 0) {
-      return "dragged_not_matching_search";
-    }
-
-    matchingIds.splice(draggedIndex, 1);
-
-    const targetIndex = matchingIds.indexOf(targetId);
-
-    if (targetIndex < 0) {
-      return "target_not_matching_search";
-    }
-
-    const insertionIndex =
-      placement === "before" ? targetIndex : targetIndex + 1;
-
-    matchingIds.splice(insertionIndex, 0, draggedId);
-
-    const unchanged = matchingSlots.every(
-      (slot, index) => this.selectedOrder[slot] === matchingIds[index],
-    );
-
-    if (unchanged) {
-      return "unchanged";
-    }
-
-    for (const [index, slot] of matchingSlots.entries()) {
-      this.selectedOrder[slot] = matchingIds[index]!;
+    for (const replacement of calculation.replacements) {
+      this.selectedOrder[replacement.index] = replacement.id;
     }
 
     this.incrementServerVersion();
