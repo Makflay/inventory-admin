@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Box, TextField } from "@mui/material";
 
 import type { OptimisticSelection } from "../types/selection";
 import type { PendingAdditions } from "../types/add-items";
+import type { AvailablePresentationSnapshot } from "./AvailableItemsResults";
 
 import { AvailableItemsResults } from "./AvailableItemsResults";
 
@@ -29,6 +30,30 @@ export function AvailableItemsList({
 }: AvailableItemsListProps) {
   const [search, setSearch] = useState("");
   const [inputValue, setInputValue] = useState("");
+  const [presentationSnapshot, setPresentationSnapshot] =
+    useState<AvailablePresentationSnapshot | null>(null);
+
+  const presentationScrollOffsetRef = useRef(0);
+
+  const handlePresentationSnapshot = useCallback(
+    (snapshot: AvailablePresentationSnapshot, scrollOffset: number) => {
+      presentationScrollOffsetRef.current = scrollOffset;
+      setPresentationSnapshot(snapshot);
+    },
+    [],
+  );
+
+  const handlePresentationScroll = useCallback((scrollOffset: number) => {
+    presentationScrollOffsetRef.current = scrollOffset;
+  }, []);
+
+  const fallbackSnapshot =
+    presentationSnapshot !== null &&
+    presentationSnapshot.search === search &&
+    (presentationSnapshot.selectionRevision !== selectionAvailableRevision ||
+      presentationSnapshot.additionRevision !== additionAvailableRevision)
+      ? presentationSnapshot
+      : null;
 
   useEffect(() => {
     if (inputValue === search) {
@@ -45,8 +70,15 @@ export function AvailableItemsList({
   }, [inputValue, search]);
 
   return (
-    <>
-      <Box sx={{ px: 2, pt: 2 }}>
+    <Box
+      sx={{
+        flex: "1 1 auto",
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      <Box sx={{ px: 2, pt: 2, flexShrink: 0 }}>
         <TextField
           fullWidth
           size="small"
@@ -73,12 +105,16 @@ export function AvailableItemsList({
         search={search}
         selectionRevision={selectionAvailableRevision}
         additionRevision={additionAvailableRevision}
+        fallbackSnapshot={fallbackSnapshot}
+        fallbackScrollOffsetRef={presentationScrollOffsetRef}
         selectionActionsDisabled={selectionActionsDisabled}
         optimisticSelection={optimisticSelection}
         pendingAdditions={pendingAdditions}
+        onPresentationSnapshot={handlePresentationSnapshot}
+        onPresentationScroll={handlePresentationScroll}
         onReconciled={onReconciled}
         onSelect={onSelect}
       />
-    </>
+    </Box>
   );
 }

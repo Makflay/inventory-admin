@@ -21,6 +21,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { AvailableItemsPageRequest } from "@inventory/shared";
 import type { OptimisticSelection } from "../types/selection";
 import type { PendingAdditions } from "../types/add-items";
+import type { CachedPage } from "../services/available-items-cache";
 
 import { useAvailableItems } from "../hooks/useAvailableItems";
 import { areAdjacent } from "../services/available-items-cache";
@@ -70,11 +71,25 @@ type AvailableItemsResultsProps = {
   selectionActionsDisabled: boolean;
   optimisticSelection: OptimisticSelection;
   pendingAdditions: PendingAdditions;
+  fallbackSnapshot: AvailablePresentationSnapshot | null;
+  fallbackScrollOffsetRef: RefObject<number>;
   onReconciled: (selectionRevision: number, additionRevision: number) => void;
   onSelect: (id: number) => void;
+  onPresentationSnapshot: (
+    snapshot: AvailablePresentationSnapshot,
+    scrollOffset: number,
+  ) => void;
+  onPresentationScroll: (scrollOffset: number) => void;
 };
 
 type VirtualRow = ItemRow | BoundaryRow | EndRow;
+
+export type AvailablePresentationSnapshot = {
+  search: string;
+  selectionRevision: number;
+  additionRevision: number;
+  pages: readonly CachedPage[];
+};
 
 function LoadBoundary({
   rootRef,
@@ -234,14 +249,19 @@ export function AvailableItemsResults({
   selectionActionsDisabled,
   optimisticSelection,
   pendingAdditions,
+  fallbackSnapshot,
+  fallbackScrollOffsetRef,
   onReconciled,
   onSelect,
+  onPresentationSnapshot,
+  onPresentationScroll,
 }: AvailableItemsResultsProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const anchorRef = useRef<{
     key: string;
     offset: number;
   } | null>(null);
+  const snapshotScrollRestoredRef = useRef(false);
 
   const captureViewportRef = useRef<() => Set<string>>(() => new Set<string>());
   const captureViewport = useCallback(() => captureViewportRef.current(), []);
@@ -250,8 +270,22 @@ export function AvailableItemsResults({
   const { pages, loading, error, initialized, loadPage, retry, touchPage } =
     useAvailableItems(search, freshnessToken, captureViewport);
 
-  const disabled = loading !== null || error !== null;
-  const count = pages.reduce((total, page) => total + page.data.ids.length, 0);
+  const showingSnapshot = !initialized && fallbackSnapshot !== null;
+
+  const presentationPages: readonly CachedPage[] = showingSnapshot
+    ? fallbackSnapshot.pages
+    : pages;
+
+  const presentationInitialized = initialized || showingSnapshot;
+
+  const disabled = showingSnapshot || loading !== null || error !== null;
+  const count = presentationPages.reduce(
+    (total, page) => total + page.data.ids.length,
+    0,
+  );
+
+  //const disabled = loading !== null || error !== null;
+  //const count = pages.reduce((total, page) => total + page.data.ids.length, 0);
 
   const { rows, detachedPendingRows } = useMemo<{
     rows: VirtualRow[];
@@ -260,8 +294,8 @@ export function AvailableItemsResults({
     const result: VirtualRow[] = [];
     const detached: DetachedPendingRow[] = [];
 
-    for (const [pageIndex, page] of pages.entries()) {
-      const previous = pages[pageIndex - 1];
+    for (const [pageIndex, page] of presentationPages.entries()) {
+      const previous = presentationPages[pageIndex - 1];
       const hasGap = previous !== undefined && !areAdjacent(previous, page);
 
       if (pageIndex === 0 || hasGap) {
@@ -302,7 +336,7 @@ export function AvailableItemsResults({
       }
     }
 
-    const lastPage = pages[pages.length - 1];
+    const lastPage = presentationPages[presentationPages.length - 1];
 
     if (lastPage !== undefined) {
       if (
@@ -331,7 +365,7 @@ export function AvailableItemsResults({
       const inserted = insertPresentationAvailableId(
         result,
         id,
-        initialized,
+        presentationInitialized,
         "selection",
       );
 
@@ -356,7 +390,7 @@ export function AvailableItemsResults({
       const inserted = insertPresentationAvailableId(
         result,
         id,
-        initialized,
+        presentationInitialized,
         "addition",
       );
 
@@ -369,7 +403,13 @@ export function AvailableItemsResults({
     }
 
     return { rows: result, detachedPendingRows: detached };
-  }, [pages, optimisticSelection, pendingAdditions, search, initialized]);
+  }, [
+    presentationPages,
+    optimisticSelection,
+    pendingAdditions,
+    search,
+    presentationInitialized,
+  ]);
 
   const getItemKey = useCallback(
     (index: number) => rows[index]?.key ?? index,
@@ -413,7 +453,7 @@ export function AvailableItemsResults({
         continue;
       }
 
-      if (row.pageKey !== null) {
+      if (!showingSnapshot && row.pageKey !== null) {
         visibleKeys.add(row.pageKey);
       }
 
@@ -427,6 +467,27 @@ export function AvailableItemsResults({
 
     return visibleKeys;
   };
+
+  useLayoutEffect(() => {
+    if (
+      !showingSnapshot ||
+      fallbackSnapshot === null ||
+      snapshotScrollRestoredRef.current
+    ) {
+      return;
+    }
+
+    snapshotScrollRestoredRef.current = true;
+
+    rowVirtualizer.scrollToOffset(fallbackScrollOffsetRef.current, {
+      behavior: "auto",
+    });
+  }, [
+    showingSnapshot,
+    fallbackSnapshot,
+    fallbackScrollOffsetRef,
+    rowVirtualizer,
+  ]);
 
   useLayoutEffect(() => {
     const anchor = anchorRef.current;
@@ -448,12 +509,39 @@ export function AvailableItemsResults({
   }, [rows, rowVirtualizer]);
 
   useEffect(() => {
+    if (!initialized) {
+      return;
+    }
+
+    onPresentationSnapshot(
+      {
+        search,
+        selectionRevision,
+        additionRevision,
+        pages,
+      },
+      rootRef.current?.scrollTop ?? 0,
+    );
+  }, [
+    initialized,
+    search,
+    selectionRevision,
+    additionRevision,
+    pages,
+    onPresentationSnapshot,
+  ]);
+
+  useEffect(() => {
     if (initialized) {
       onReconciled(selectionRevision, additionRevision);
     }
   }, [initialized, selectionRevision, additionRevision, onReconciled]);
 
   useEffect(() => {
+    if (showingSnapshot) {
+      return;
+    }
+
     const root = rootRef.current;
 
     if (root === null) {
@@ -482,42 +570,56 @@ export function AvailableItemsResults({
     for (const pageKey of visiblePageKeys) {
       touchPage(pageKey);
     }
-  }, [rows, virtualItems, touchPage]);
+  }, [rows, virtualItems, touchPage, showingSnapshot]);
 
   return (
     <>
-      <Box sx={{ p: 2 }}>
+      <Box sx={{ p: 2, flexShrink: 0 }}>
         <Typography variant="body2" color="text.secondary">
           Доступно без загрузки: {count}
         </Typography>
 
-        {loading !== null && (
-          <Stack
-            direction="row"
-            spacing={1}
-            role="status"
-            sx={{ mt: 1, alignItems: "center" }}
-          >
-            <CircularProgress size={20} aria-hidden="true" />
-            <Typography variant="body2">
-              {initialized ? "Загружаем ещё элементы…" : "Загрузка элементов…"}
-            </Typography>
-          </Stack>
-        )}
-
-        {error !== null && (
-          <Alert
-            severity="error"
-            sx={{ mt: 1 }}
-            action={
-              <Button color="inherit" onClick={retry}>
-                Повторить
-              </Button>
-            }
-          >
-            {error.message}
-          </Alert>
-        )}
+        <Box
+          sx={{
+            minHeight: 48,
+            mt: 1,
+            display: "flex",
+            alignItems: "center",
+            minWidth: 0,
+          }}
+        >
+          {error !== null ? (
+            <Alert
+              severity="error"
+              sx={{ mt: 1 }}
+              action={
+                <Button color="inherit" onClick={retry}>
+                  Повторить
+                </Button>
+              }
+            >
+              {error.message}
+            </Alert>
+          ) : loading !== null ? (
+            <Stack
+              direction="row"
+              spacing={1}
+              role="status"
+              sx={{ mt: 1, alignItems: "center" }}
+            >
+              <CircularProgress
+                size={20}
+                aria-hidden="true"
+                sx={{ flexShrink: 0 }}
+              />
+              <Typography variant="body2" noWrap>
+                {initialized
+                  ? "Загружаем ещё элементы…"
+                  : "Загрузка элементов…"}
+              </Typography>
+            </Stack>
+          ) : null}
+        </Box>
       </Box>
 
       {detachedPendingRows.length > 0 && (
@@ -573,15 +675,21 @@ export function AvailableItemsResults({
         aria-busy={loading !== null}
         tabIndex={0}
         sx={{
-          height: 480,
+          height: { xs: 480, md: "auto" },
+          flex: { md: "1 1 auto" },
+          minHeight: 0,
           overflowY: "auto",
+          overflowX: "hidden",
           overflowAnchor: "none",
           overscrollBehavior: "contain",
           scrollbarGutter: "stable",
           px: 2,
         }}
+        onScroll={(event) => {
+          onPresentationScroll(event.currentTarget.scrollTop);
+        }}
       >
-        {initialized &&
+        {presentationInitialized &&
         rows.length === 0 &&
         detachedPendingRows.length === 0 ? (
           <Typography color="text.secondary" sx={{ py: 2 }}>

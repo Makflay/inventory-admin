@@ -2,6 +2,43 @@ html {
   min-width: 320px;
 }
 
+html,
+body,
 #root {
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
+}
+
+body {
+  overflow: hidden;
+}
+
+#root {
+  overflow: hidden;
+}
+
+.app-shell {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 899.95px) {
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+  }
+
+  body,
+  #root {
+    overflow: visible;
+  }
+
+  .app-shell {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Box, TextField } from "@mui/material";
 
 import type {
@@ -6,6 +6,7 @@ import type {
   OptimisticReorderOperation,
   QueueReorderInput,
 } from "../types/selection";
+import type { SelectedPresentationSnapshot } from "./SelectedItemsResults";
 
 import { SelectedItemsResults } from "./SelectedItemsResults";
 
@@ -34,6 +35,29 @@ export function SelectedItemsList({
 }: SelectedItemsListProps) {
   const [inputValue, setInputValue] = useState("");
   const [search, setSearch] = useState("");
+  const [presentationSnapshot, setPresentationSnapshot] =
+    useState<SelectedPresentationSnapshot | null>(null);
+
+  const presentationScrollOffsetRef = useRef(0);
+
+  const handlePresentationSnapshot = useCallback(
+    (snapshot: SelectedPresentationSnapshot, scrollOffset: number) => {
+      presentationScrollOffsetRef.current = scrollOffset;
+      setPresentationSnapshot(snapshot);
+    },
+    [],
+  );
+
+  const handlePresentationScroll = useCallback((scrollOffset: number) => {
+    presentationScrollOffsetRef.current = scrollOffset;
+  }, []);
+
+  const fallbackSnapshot =
+    presentationSnapshot !== null &&
+    presentationSnapshot.search === search &&
+    presentationSnapshot.revision !== selectedRevision
+      ? presentationSnapshot
+      : null;
 
   useEffect(() => {
     if (inputValue === search) {
@@ -50,7 +74,14 @@ export function SelectedItemsList({
   }, [inputValue, search]);
 
   return (
-    <>
+    <Box
+      sx={{
+        flex: "1 1 auto",
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
       <Box sx={{ p: 2, pt: 2 }}>
         <TextField
           fullWidth
@@ -74,6 +105,10 @@ export function SelectedItemsList({
         search={search}
         revision={selectedRevision}
         selectionActionsDisabled={selectionActionsDisabled}
+        fallbackSnapshot={fallbackSnapshot}
+        fallbackScrollOffsetRef={presentationScrollOffsetRef}
+        onPresentationSnapshot={handlePresentationSnapshot}
+        onPresentationScroll={handlePresentationScroll}
         optimisticSelection={optimisticSelection}
         optimisticReorders={optimisticReorders}
         onInitialLoadSettled={onInitialLoadSettled}
@@ -81,6 +116,6 @@ export function SelectedItemsList({
         onUnselect={onUnselect}
         onReorder={onReorder}
       />
-    </>
+    </Box>
   );
 }

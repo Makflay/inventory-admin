@@ -4,8 +4,7 @@ import { InventoryPage } from "./pages/InventoryPage";
 
 function App() {
   return (
-    <main>
-      <h1>Inventory Admin</h1>
+    <main className="app-shell">
       <InventoryPage />
     </main>
   );

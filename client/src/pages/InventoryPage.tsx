@@ -89,12 +89,28 @@ export function InventoryPage() {
   );
 
   return (
-    <Container component="main" maxWidth="lg" sx={{ py: 4 }}>
-      <Typography component="h1" variant="h4" sx={{ mb: 3, fontWeight: 600 }}>
+    <Container
+      component="main"
+      maxWidth="lg"
+      sx={{
+        height: { xs: "auto", md: "100%" },
+        minHeight: { xs: "100dvh", md: 0 },
+        py: 4,
+        boxSizing: "border-box",
+        display: "flex",
+        flexDirection: "column",
+        overflow: { xs: "visible", md: "hidden" },
+      }}
+    >
+      <Typography
+        component="h1"
+        variant="h4"
+        sx={{ mb: 3, fontWeight: 600, flexShrink: 0 }}
+      >
         Управление элементами
       </Typography>
 
-      <Box sx={{ p: 2 }}>
+      <Box sx={{ p: 2, flexShrink: 0 }}>
         <Typography id="available-items-heading" component="h2" variant="h6">
           Доступные элементы
         </Typography>
@@ -104,15 +120,27 @@ export function InventoryPage() {
       <Stack
         direction={{ xs: "column", md: "row" }}
         spacing={3}
-        sx={{ alignItems: "stretch" }}
+        sx={{
+          flex: { md: "1 1 auto" },
+          minHeight: { md: 0 },
+          overflow: { xs: "visible", md: "hidden" },
+          alignItems: "stretch",
+        }}
       >
         <Paper
           component="section"
           variant="outlined"
           aria-labelledby="available-items-heading"
-          sx={{ flex: 1, minWidth: 0, overflow: "hidden" }}
+          sx={{
+            flex: { md: "1 1 0" },
+            minWidth: 0,
+            minHeight: { xs: 320, md: 0 },
+            display: "flex",
+            flexDirection: "column",
+            overflow: "hidden",
+          }}
         >
-          <Box sx={{ p: 2 }}>
+          <Box sx={{ p: 2, flexShrink: 0 }}>
             <Typography
               id="available-items-heading"
               component="h2"
@@ -125,7 +153,7 @@ export function InventoryPage() {
           <Divider />
 
           {additionError !== null && (
-            <Box sx={{ px: 2, pt: 2 }}>
+            <Box sx={{ px: 2, pt: 2, flexShrink: 0 }}>
               <Alert
                 severity="error"
                 action={
@@ -157,13 +185,15 @@ export function InventoryPage() {
           variant="outlined"
           aria-labelledby="selected-items-heading"
           sx={{
-            flex: 1,
+            flex: { md: "1 1 0" },
             minWidth: 0,
-            minHeight: 320,
+            minHeight: { xs: 320, md: 0 },
+            display: "flex",
+            flexDirection: "column",
             overflow: "hidden",
           }}
         >
-          <Box sx={{ p: 2 }}>
+          <Box sx={{ p: 2, flexShrink: 0 }}>
             <Typography id="selected-items-heading" component="h2" variant="h6">
               Выбранные элементы
             </Typography>
@@ -172,7 +202,7 @@ export function InventoryPage() {
           <Divider />
 
           {selectionError !== null && (
-            <Box sx={{ px: 2, pt: 2 }}>
+            <Box sx={{ px: 2, pt: 2, flexShrink: 0 }}>
               <Alert
                 severity="error"
                 action={

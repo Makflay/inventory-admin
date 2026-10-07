@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import type { RefObject } from "react";
 import {
   Alert,
   Box,
@@ -23,15 +24,15 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
-  type DragEndEvent,
-  type DragStartEvent,
 } from "@dnd-kit/core";
+import type { DragEndEvent, DragStartEvent } from "@dnd-kit/core";
 
 import type {
   OptimisticSelection,
   OptimisticReorderOperation,
   QueueReorderInput,
 } from "../types/selection";
+import type { CachedSelectedPage } from "../services/selected-items-cache";
 
 import { useSelectedItems } from "../hooks/useSelectedItems";
 import { areSelectedPagesAdjacent } from "../services/selected-items-cache";
@@ -64,16 +65,30 @@ type EndRow = {
 
 type VirtualRow = ItemRow | BoundaryRow | EndRow;
 
+export type SelectedPresentationSnapshot = {
+  search: string;
+  revision: number;
+  pages: readonly CachedSelectedPage[];
+  datasetVersion: number;
+};
+
 type SelectedItemsResultsProps = {
   search: string;
   revision: number;
   selectionActionsDisabled: boolean;
   optimisticSelection: OptimisticSelection;
   optimisticReorders: readonly OptimisticReorderOperation[];
+  fallbackSnapshot: SelectedPresentationSnapshot | null;
+  fallbackScrollOffsetRef: RefObject<number>;
   onInitialLoadSettled: () => void;
   onReconciled: (revision: number) => void;
   onUnselect: (id: number) => void;
   onReorder: (input: QueueReorderInput) => boolean;
+  onPresentationSnapshot: (
+    snapshot: SelectedPresentationSnapshot,
+    scrollOffset: number,
+  ) => void;
+  onPresentationScroll: (scrollOffset: number) => void;
 };
 
 function matchesSearch(id: number, search: string): boolean {
@@ -138,10 +153,14 @@ export function SelectedItemsResults({
   selectionActionsDisabled,
   optimisticSelection,
   optimisticReorders,
+  fallbackSnapshot,
+  fallbackScrollOffsetRef,
   onInitialLoadSettled,
   onReconciled,
   onUnselect,
   onReorder,
+  onPresentationSnapshot,
+  onPresentationScroll,
 }: SelectedItemsResultsProps) {
   const rootRef = useRef<HTMLDivElement | null>(null);
 
@@ -149,6 +168,7 @@ export function SelectedItemsResults({
     key: string;
     offset: number;
   } | null>(null);
+  const snapshotScrollRestoredRef = useRef(false);
 
   const captureViewportRef = useRef<() => Set<string>>(() => new Set<string>());
   const captureViewport = useCallback(() => captureViewportRef.current(), []);
@@ -163,8 +183,17 @@ export function SelectedItemsResults({
     touchPage,
     datasetVersion,
   } = useSelectedItems(search, freshnessToken, captureViewport);
+  const showingSnapshot = !initialized && fallbackSnapshot !== null;
 
-  const disabled = loading !== null || error !== null;
+  const presentationPages: readonly CachedSelectedPage[] = showingSnapshot
+    ? fallbackSnapshot.pages
+    : pages;
+
+  const presentationInitialized = initialized || showingSnapshot;
+
+  const disabled = showingSnapshot || loading !== null || error !== null;
+
+  //const disabled = loading !== null || error !== null;
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -185,6 +214,7 @@ export function SelectedItemsResults({
   );
 
   const versionEligible =
+    !showingSnapshot &&
     datasetVersion !== null &&
     [...pendingReorderVersions].every((version) => version === datasetVersion);
 
@@ -197,8 +227,8 @@ export function SelectedItemsResults({
     let regionNumber = -1;
     let regionKey: string | null = null;
 
-    for (const [pageIndex, page] of pages.entries()) {
-      const previous = pages[pageIndex - 1];
+    for (const [pageIndex, page] of presentationPages.entries()) {
+      const previous = presentationPages[pageIndex - 1];
 
       const hasGap =
         previous !== undefined && !areSelectedPagesAdjacent(previous, page);
@@ -244,7 +274,7 @@ export function SelectedItemsResults({
       }
     }
 
-    const lastPage = pages[pages.length - 1];
+    const lastPage = presentationPages[presentationPages.length - 1];
 
     if (lastPage !== undefined) {
       if (
@@ -281,7 +311,9 @@ export function SelectedItemsResults({
       const endIndex = result.findIndex((row) => row.kind === "end");
 
       const confirmedFilteredListIsEmpty =
-        initialized && pages.length === 0 && result.length === 0;
+        presentationInitialized &&
+        presentationPages.length === 0 &&
+        result.length === 0;
 
       const lastItemRegion =
         [...result].reverse().find((row): row is ItemRow => row.kind === "item")
@@ -320,7 +352,13 @@ export function SelectedItemsResults({
       rows: applyOptimisticReorders(result, optimisticReorders, search),
       detachedPendingIds: detached,
     };
-  }, [pages, optimisticSelection, search, initialized, optimisticReorders]);
+  }, [
+    presentationPages,
+    optimisticSelection,
+    search,
+    presentationInitialized,
+    optimisticReorders,
+  ]);
 
   const itemById = useMemo(
     () =>
@@ -374,7 +412,7 @@ export function SelectedItemsResults({
         continue;
       }
 
-      if (row.pageKey !== null) {
+      if (!showingSnapshot && row.pageKey !== null) {
         visibleKeys.add(row.pageKey);
       }
 
@@ -402,6 +440,10 @@ export function SelectedItemsResults({
   }, [initialized, revision, onReconciled]);
 
   useLayoutEffect(() => {
+    if (showingSnapshot) {
+      return;
+    }
+
     const anchor = anchorRef.current;
 
     anchorRef.current = null;
@@ -421,9 +463,57 @@ export function SelectedItemsResults({
     rowVirtualizer.scrollToOffset(Math.max(0, nextOffset), {
       behavior: "auto",
     });
-  }, [rows, rowVirtualizer]);
+  }, [rows, rowVirtualizer, showingSnapshot]);
+
+  useLayoutEffect(() => {
+    if (
+      !showingSnapshot ||
+      fallbackSnapshot === null ||
+      snapshotScrollRestoredRef.current
+    ) {
+      return;
+    }
+
+    snapshotScrollRestoredRef.current = true;
+
+    rowVirtualizer.scrollToOffset(fallbackScrollOffsetRef.current, {
+      behavior: "auto",
+    });
+  }, [
+    showingSnapshot,
+    fallbackSnapshot,
+    rowVirtualizer,
+    fallbackScrollOffsetRef,
+  ]);
 
   useEffect(() => {
+    if (!initialized || datasetVersion === null) {
+      return;
+    }
+
+    onPresentationSnapshot(
+      {
+        search,
+        revision,
+        pages,
+        datasetVersion,
+      },
+      rootRef.current?.scrollTop ?? 0,
+    );
+  }, [
+    initialized,
+    datasetVersion,
+    search,
+    revision,
+    pages,
+    onPresentationSnapshot,
+  ]);
+
+  useEffect(() => {
+    if (showingSnapshot) {
+      return;
+    }
+
     const root = rootRef.current;
 
     if (root === null) {
@@ -452,7 +542,7 @@ export function SelectedItemsResults({
     for (const pageKey of visiblePageKeys) {
       touchPage(pageKey);
     }
-  }, [rows, virtualItems, touchPage]);
+  }, [rows, virtualItems, touchPage, showingSnapshot]);
 
   const handleDragStart = useCallback(
     (event: DragStartEvent) => {
@@ -539,34 +629,41 @@ export function SelectedItemsResults({
         }}
         onDragEnd={handleDragEnd}
       >
-        <Box sx={{ p: 2 }}>
-          {loading !== null && (
-            <Stack
-              direction="row"
-              spacing={1}
-              role="status"
-              sx={{ alignItems: "center" }}
-            >
-              <CircularProgress size={20} aria-hidden="true" />
+        <Box sx={{ p: 2, flexShrink: 0 }}>
+          <Box
+            sx={{
+              minHeight: 48,
+              display: "flex",
+              alignItems: "center",
+              minWidth: 0,
+            }}
+          >
+            {error !== null ? (
+              <Alert
+                severity="error"
+                action={
+                  <Button color="inherit" onClick={retry}>
+                    Повторить
+                  </Button>
+                }
+              >
+                {error.message}
+              </Alert>
+            ) : loading !== null ? (
+              <Stack
+                direction="row"
+                spacing={1}
+                role="status"
+                sx={{ alignItems: "center" }}
+              >
+                <CircularProgress size={20} aria-hidden="true" />
 
-              <Typography variant="body2">
-                Загрузка выбранных элементов…
-              </Typography>
-            </Stack>
-          )}
-
-          {error !== null && (
-            <Alert
-              severity="error"
-              action={
-                <Button color="inherit" onClick={retry}>
-                  Повторить
-                </Button>
-              }
-            >
-              {error.message}
-            </Alert>
-          )}
+                <Typography variant="body2">
+                  Загрузка выбранных элементов…
+                </Typography>
+              </Stack>
+            ) : null}
+          </Box>
         </Box>
 
         {detachedPendingIds.length > 0 && (
@@ -618,21 +715,25 @@ export function SelectedItemsResults({
           aria-busy={loading !== null}
           tabIndex={0}
           sx={{
-            height: 480,
+            height: { xs: 480, md: "auto" },
+            flex: { md: "1 1 auto" },
+            minHeight: 0,
             overflowY: "auto",
+            overflowX: "hidden",
             overflowAnchor: "none",
             overscrollBehavior: "contain",
             scrollbarGutter: "stable",
             px: 2,
           }}
+          onScroll={(event) => {
+            onPresentationScroll(event.currentTarget.scrollTop);
+          }}
         >
-          {initialized &&
+          {presentationInitialized &&
           rows.length === 0 &&
           detachedPendingIds.length === 0 ? (
             <Typography color="text.secondary" sx={{ py: 2 }}>
-              {initialized
-                ? "Загружаем ещё выбранные элементы…"
-                : "Нет выбранных элементов."}
+              Нет выбранных элементов.
             </Typography>
           ) : (
             <Box
